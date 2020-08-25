@@ -15,6 +15,8 @@
 // * Removed dim() from blinklib to save > 100 bytes
 // * Removed all use of makeColorHSB
 // * Added setColorOnFace2 to accept a pointer instead of raw Color value
+// * Simplified sun system (leaves & branches don't block sun)
+// * Genericized systems (evaporation, bug transfer)
 
 // Nice-to-haves:
 // * Sun pulses do half and half to show direction within the tile
@@ -28,6 +30,7 @@
 #define TRACK_FRAME_TIME    0
 //#define NO_STACK_WATCHER
 #define DEBUG_PLANT_ENERGY  0
+#define DEBUG_SPAWN_BUG     0
 
 #if TRACK_FRAME_TIME
 unsigned long currentTime = 0;
@@ -730,7 +733,7 @@ void handleUserInput()
       // Five (or more) clicks resets this tile
       resetOurState();
     }
-    /*
+#if DEBUG_SPAWN_BUG
     else if (clicks == 4)
     {
       if (tileFlags & TileFlag_HasBug)
@@ -742,35 +745,35 @@ void handleUserInput()
         tileFlags |= TileFlag_HasBug;
       }
     }
-    */
-    else if (clicks == 2)
+#endif
+    else if (clicks == 3)
     {
-      // Cycle through the special tiles
-      if (tileFlags & TileFlag_HasDripper)
-      {
-        tileFlags &= ~TileFlag_HasDripper;
-        tileFlags |= TileFlag_HasDirt;
-      }
-      else if (tileFlags & TileFlag_HasDirt)
-      {
-        tileFlags &= ~TileFlag_HasDirt;
-        tileFlags |= TileFlag_HasSun;
-        sunDirection = 3;
-      }
-      else if (tileFlags & TileFlag_HasSun)
-      {
-        tileFlags &= ~TileFlag_HasSun;
-      }
-      else
-      {
-        tileFlags |= TileFlag_HasDripper;
-        gravityUpFace = 0;  // dripper defines gravity
-      }
     }
   }
 
   if (buttonDoubleClicked())
   {
+    // Cycle through the special tiles
+    if (tileFlags & TileFlag_HasDripper)
+    {
+      tileFlags &= ~TileFlag_HasDripper;
+      tileFlags |= TileFlag_HasDirt;
+    }
+    else if (tileFlags & TileFlag_HasDirt)
+    {
+      tileFlags &= ~TileFlag_HasDirt;
+      tileFlags |= TileFlag_HasSun;
+      sunDirection = 3;
+    }
+    else if (tileFlags & TileFlag_HasSun)
+    {
+      tileFlags &= ~TileFlag_HasSun;
+    }
+    else
+    {
+      tileFlags |= TileFlag_HasDripper;
+      gravityUpFace = 0;  // dripper defines gravity
+    }
   }
 
   if (buttonSingleClicked() && !hasWoken())
@@ -896,13 +899,14 @@ void processCommForFace(Command command, byte value, byte f)
       if (hasPlant)
       {
         // Leaves absorb the sun
-        byte sunGatheredByLeaves = MIN(value, plantNumLeaves);
-        gatheredSun = sunGatheredByLeaves;
-        value -= sunGatheredByLeaves;
+//        byte sunGatheredByLeaves = MIN(value, plantNumLeaves);
+//        gatheredSun = sunGatheredByLeaves;
+//        value -= sunGatheredByLeaves;
+        gatheredSun = plantNumLeaves;
         
         // Branches just block the sun
-        byte sunBlockedByBranches = MIN(value, plantNumBranches);
-        value -= sunBlockedByBranches;
+//        byte sunBlockedByBranches = MIN(value, plantNumBranches);
+//        value -= sunBlockedByBranches;
       }
     
       if (tileFlags & TileFlag_HasDirt)
@@ -1326,6 +1330,9 @@ void loopPlant()
         plantEnergy -= plantStateNode->energyGrow;
         plantStateNodeIndex += stateOffset;
 
+        // Next state might need to wait for a child branch!
+        plantChildBranchGrew = false;
+
         // Tell the root plant something grew - in case it is waiting on us
         enqueueCommOnFace(plantRootFace, Command_ChildBranchGrew, 0);
       }
@@ -1479,15 +1486,8 @@ void loopBug()
   {
     bugDistance = 0;
     bugDirection = 1;
-    // Pick a different corner
-    char offset = 3;
-    switch (millis() & 0x3)
-    {
-      case 0: offset = 3; break;
-      case 1: offset = 2; break;
-      case 2: offset = 3; break;
-      case 3: offset = 4; break;
-    }
+    // Pick a different corner (50% opposite, 25% opposite-left, 25% opposite-right)
+    char offset = (millis() & 0x1) ? 3 : ((millis() & 0x2) ? 2 : 4);
     bugTargetCorner = CW_FROM_FACE(bugTargetCorner, offset);
   }
 }
@@ -1590,33 +1590,27 @@ void accumulateWater()
 void evaporateWater()
 {
   // Water evaporation/seepage
-  if (evaporationTimer.isExpired())
+  if (!evaporationTimer.isExpired())
   {
-    byte amountToEvaporate = 1;
-    FOREACH_FACE(f)
-    {
-      byte *waterToEvaporate = &faceStates[f].waterLevel;
+    return;
+  }
+  evaporationTimer.set(EVAPORATION_RATE);
+  
+  byte amountToEvaporate = 1;
+  FOREACH_FACE(f)
+  {
+    byte *waterToEvaporate = &faceStates[f].waterLevel;
 
-      // Dirt faces evaporate from the stored amount
-      if ((tileFlags & TileFlag_HasDirt) && (f >= 2) && (f <= 4))
-      {
-        waterToEvaporate = &faceStates[f].waterStored;
-      }
-      
-      if (*waterToEvaporate > 0)
-      {
-        if (*waterToEvaporate > amountToEvaporate)
-        {
-          *waterToEvaporate -= amountToEvaporate;
-        }
-        else
-        {
-          *waterToEvaporate = 0;
-        }
-      }
+    // Dirt faces evaporate from the stored amount
+    if ((tileFlags & TileFlag_HasDirt) && (f >= 2) && (f <= 4))
+    {
+      waterToEvaporate = &faceStates[f].waterStored;
     }
     
-    evaporationTimer.set(EVAPORATION_RATE);
+    if (*waterToEvaporate > 0)
+    {
+      *waterToEvaporate -= amountToEvaporate;
+    }
   }
 }
 
