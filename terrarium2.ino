@@ -51,7 +51,7 @@ byte sponge[25];
 #define CCW_FROM_FACE CCW_FROM_FACE1
 #define CCW_FROM_FACE1(f, amt) (((f) - (amt)) + (((f) >= (amt)) ? 0 : 6))
 
-#define CW_FROM_FACE CW_FROM_FACE2
+#define CW_FROM_FACE CW_FROM_FACE1
 #define CW_FROM_FACE2(f, amt) (((f) + (amt)) % FACE_COUNT)
 //byte cwFromFace[] = { 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5 };
 
@@ -143,11 +143,6 @@ struct FaceState
 };
 FaceState faceStates[FACE_COUNT];
 
-enum TransferType
-{
-  TransferType_Bug
-};
-
 enum Command
 {
   Command_None,
@@ -157,9 +152,9 @@ enum Command
   Command_DistEnergy,     // Distribute plant energy
   Command_SendSun,        // Send sunlight from Sun tiles
   Command_GatherSun,      // Gather sun from leaves to root
-  Command_TryTransfer,    // Attempt to transfer something from one tile to another (must be confirmed)
-  Command_TryTransferCW,  // Same as above, but transfer to the face CW from the receiver
-  Command_TransferAccept, // Confirmation of the transfer - sender must tolerate this never arriving, or arriving late
+  Command_TransferBug,    // Attempt to transfer a bug from one tile to another (must be confirmed)
+  Command_TransferBugCW,  // Same as above, but transfer to the face CW from the receiver
+  Command_BugAccepted,    // Confirmation of the transfer - sender must tolerate this never arriving, or arriving late
   Command_RainbowCheck,   // Follows a sunbeam looking for a rainbow
   Command_RainbowFound,   // Found a rainbow!
   Command_ChildBranchGrew,// Sent down a plant to tell it that something grew
@@ -390,7 +385,7 @@ byte plantNumBranches;
 #define GENERATE_SUN_RATE 500
 Timer generateSunTimer;
 
-byte sunDirection = 0;
+byte sunDirection = 3;
 
 #define SUN_PULSE_RATE 250
 Timer sunPulseTimer;
@@ -735,6 +730,7 @@ void handleUserInput()
       // Five (or more) clicks resets this tile
       resetOurState();
     }
+    /*
     else if (clicks == 4)
     {
       if (tileFlags & TileFlag_HasBug)
@@ -746,9 +742,10 @@ void handleUserInput()
         tileFlags |= TileFlag_HasBug;
       }
     }
-    else if (clicks == 3)
+    */
+    else if (clicks == 2)
     {
-      // Three clicks cycles through the special tiles
+      // Cycle through the special tiles
       if (tileFlags & TileFlag_HasDripper)
       {
         tileFlags &= ~TileFlag_HasDripper;
@@ -758,11 +755,11 @@ void handleUserInput()
       {
         tileFlags &= ~TileFlag_HasDirt;
         tileFlags |= TileFlag_HasSun;
+        sunDirection = 3;
       }
       else if (tileFlags & TileFlag_HasSun)
       {
         tileFlags &= ~TileFlag_HasSun;
-        sunDirection = 0;
       }
       else
       {
@@ -774,7 +771,11 @@ void handleUserInput()
 
   if (buttonDoubleClicked())
   {
-    // Two clicks adjusts dripper speed or sun direction
+  }
+
+  if (buttonSingleClicked() && !hasWoken())
+  {
+    // Adjust dripper speed or sun direction
     if (tileFlags & TileFlag_HasDripper)
     {
         dripperSpeedScale++;
@@ -788,10 +789,6 @@ void handleUserInput()
       // Cycle around the sun directions
       sunDirection = (sunDirection == 5) ? 0 : (sunDirection + 1);
     }
-  }
-
-  if (buttonSingleClicked() && !hasWoken())
-  {
   }
 }
 
@@ -932,41 +929,25 @@ void processCommForFace(Command command, byte value, byte f)
       }
       break;
 
-    case Command_TryTransfer:
-    case Command_TryTransferCW:
-    {
-      TransferType transferType = value;
-      switch (transferType)
+    case Command_TransferBug:
+    case Command_TransferBugCW:
+      if (!(tileFlags & TileFlag_HasBug) && !(tileFlags & TileFlag_HasDirt) && !(faceStates[f].flags & FaceFlag_WaterFull))
       {
-        case TransferType_Bug:
-          if (!(tileFlags & TileFlag_HasBug) && !(tileFlags & TileFlag_HasDirt) && !(faceStates[f].flags & FaceFlag_WaterFull))
-          {
-            // No bug in this tile - transfer accepted
-            tileFlags |= TileFlag_HasBug;
-            bugTargetCorner = (command == Command_TryTransfer) ? f : CW_FROM_FACE(f, 1);
-            bugDistance  = 64;
-            bugDirection = -1;  // start going towards the middle
-            bugFlapOpen = 0;    // looks better starting closed
-            
-            // Notify the sender
-            enqueueCommOnFace(f, Command_TransferAccept, value);
-          }
-          break;
+        // No bug in this tile - transfer accepted
+        tileFlags |= TileFlag_HasBug;
+        bugTargetCorner = (command == Command_TransferBug) ? f : CW_FROM_FACE(f, 1);
+        bugDistance  = 64;
+        bugDirection = -1;  // start going towards the middle
+        bugFlapOpen = 0;    // looks better starting closed
+        
+        // Notify the sender
+        enqueueCommOnFace(f, Command_BugAccepted, value);
       }
-    }
       break;
 
-    case Command_TransferAccept:
-    {
-      TransferType transferType = value;
-      switch (transferType)
-      {
-        case TransferType_Bug:
-          // Bug transferred! Remove ours
-          tileFlags &= ~TileFlag_HasBug;
-          break;
-      }
-    }
+    case Command_BugAccepted:
+      // Bug transferred! Remove ours
+      tileFlags &= ~TileFlag_HasBug;
       break;
 
     case Command_RainbowCheck:
@@ -1243,9 +1224,9 @@ void loopDirt()
 
   // Don't generate any energy if the plant is submerged
   // Only need to check the three faces above ground
-  if (faceStates[0].waterLevel > 0 &&
-      faceStates[1].waterLevel > 0 &&
-      faceStates[5].waterLevel > 0)
+  if (faceStates[0].flags & FaceFlag_WaterFull &&
+      faceStates[1].flags & FaceFlag_WaterFull &&
+      faceStates[5].flags & FaceFlag_WaterFull)
   {
     energyToDistribute = 0;
   }
@@ -1274,19 +1255,17 @@ void loopPlant()
       return;
     }
 
-    if (tileFlags & TileFlag_HasDirt)
+    if (!(tileFlags & TileFlag_HasDirt))
     {
-      // Try to start growing a new plant
-      // TODO : Different plant types!
-      hasPlant = true;
-      plantStateNodeIndex = 0;
-      plantRootFace = 3;
-    }
-    else
-    {
-      // No dirt - don't know what type of plant to grow yet
+      // No dirt - can't start a plant
       return;
     }
+    
+    // Try to start growing a new plant
+    // TODO : Different plant types!
+    hasPlant = true;
+    plantStateNodeIndex = 0;
+    plantRootFace = 3;
   }
 
 #if DEBUG_PLANT_ENERGY
@@ -1300,7 +1279,6 @@ void loopPlant()
     enqueueCommOnFace(plantRootFace, Command_GatherSun, gatheredSun);
     gatheredSun = 0;
   }
-  
   
   PlantStateNode *plantStateNode = &plantStateGraphTree[plantStateNodeIndex];
 
@@ -1330,7 +1308,7 @@ void loopPlant()
   {
     if (plantEnergy >= plantStateNode->energyGrow)
     {
-      // Some states wait to receive sun from a child branch
+      // Some states wait for a child branch to grow
       if (!plantStateNode->waitForGrowth || plantChildBranchGrew)
       {
         // Some states choose between two next states
@@ -1411,11 +1389,11 @@ void loopSun()
   }
   
   // Send out sunlight in the appropriate direction
-  // Must be relative to gravity's up direction
   enqueueCommOnFace(sunDirection, Command_SendSun, SUN_STRENGTH);
   tileFlags |= TileFlag_PulseSun;
 
   // Check for rainbows in certain directions of sunlight
+  // Must be relative to gravity's up direction
   byte downLeft = CW_FROM_FACE(gravityUpFace, 4);
   byte downRight = CW_FROM_FACE(gravityUpFace, 2);
   if (sunDirection == downLeft || sunDirection == downRight)
@@ -1439,17 +1417,17 @@ void loopBug()
 
 /*
   // Submerged bugs die :(
-  if (faceStates[0].waterLevel > 0 &&
-      faceStates[1].waterLevel > 0 &&
-      faceStates[2].waterLevel > 0 &&
-      faceStates[3].waterLevel > 0 &&
-      faceStates[4].waterLevel > 0 &&
-      faceStates[5].waterLevel > 0)
+  if (faceStates[0].flags & FaceFlag_WaterFull &&
+      faceStates[1].flags & FaceFlag_WaterFull &&
+      faceStates[2].flags & FaceFlag_WaterFull &&
+      faceStates[3].flags & FaceFlag_WaterFull &&
+      faceStates[4].flags & FaceFlag_WaterFull &&
+      faceStates[5].flags & FaceFlag_WaterFull)
   {
     tileFlags &= ~TileFlag_HasBug;
     return;
   }
-*/
+  */
 
   // Did the bug flap its wings?
   if (!bugFlapTimer.isExpired())
@@ -1461,63 +1439,56 @@ void loopBug()
   bugFlapOpen = 1 - bugFlapOpen;
 
   // Move the bug along its path
-  if (bugDirection == 0)
+  bugDistance += (bugDirection > 0) ? BUG_MOVE_RATE : -BUG_MOVE_RATE;
+  if (bugDistance > 64)
   {
-    // Just sit there I guess?
+    // Start moving back towards the center
+    bugDistance = 64;
+    bugDirection = -1;
+    
+    // While doing this, try to transfer to neighbor cell
+    // If the transfer is accepted then the bug will leave this tile
+    byte otherFace = CCW_FROM_FACE(bugTargetCorner, 1);
+    byte tryTransferToFace = 0;
+    Command command = Command_None;
+
+    if (faceStates[bugTargetCorner].flags & FaceFlag_NeighborPresent && !(faceStates[bugTargetCorner].flags & FaceFlag_NeighborWaterFull))
+    {
+      tryTransferToFace = bugTargetCorner;
+      command = Command_TransferBugCW;
+    }
+    
+    if (faceStates[otherFace].flags & FaceFlag_NeighborPresent && !(faceStates[otherFace].flags & FaceFlag_NeighborWaterFull))
+    {
+      // Choose the other face if the first face isn't present
+      // If both faces are present, then do a coin flip
+      // Using the LSB of the time *should* be random enough for a coin flip
+      if (tryTransferToFace == 0 || millis() & 0x1)
+      {
+        tryTransferToFace = otherFace;
+        command = Command_TransferBug;
+      }
+    }
+
+    if (command != Command_None)
+    {
+      enqueueCommOnFace(tryTransferToFace, command, 0); // data is DC
+    }
   }
-  else
+  else if (bugDistance < 0)
   {
-    bugDistance += (bugDirection > 0) ? BUG_MOVE_RATE : -BUG_MOVE_RATE;
-    if (bugDistance > 64)
+    bugDistance = 0;
+    bugDirection = 1;
+    // Pick a different corner
+    char offset = 3;
+    switch (millis() & 0x3)
     {
-      // Start moving back towards the center
-      bugDistance = 64;
-      bugDirection = -1;
-      
-      // While doing this, try to transfer to neighbor cell
-      // If the transfer is accepted then the bug will leave this tile
-      byte otherFace = CCW_FROM_FACE(bugTargetCorner, 1);
-      byte tryTransferToFace = 0;
-      Command command = Command_None;
-
-      if (faceStates[bugTargetCorner].flags & FaceFlag_NeighborPresent && !(faceStates[bugTargetCorner].flags & FaceFlag_NeighborWaterFull))
-      {
-        tryTransferToFace = bugTargetCorner;
-        command = Command_TryTransferCW;
-      }
-      
-      if (faceStates[otherFace].flags & FaceFlag_NeighborPresent && !(faceStates[otherFace].flags & FaceFlag_NeighborWaterFull))
-      {
-        // Choose the other face if the first face isn't present
-        // If both faces are present, then do a coin flip
-        // Using the LSB of the time *should* be random enough for a coin flip
-        if (tryTransferToFace == 0 || millis() & 0x1)
-        {
-          tryTransferToFace = otherFace;
-          command = Command_TryTransfer;
-        }
-      }
-
-      if (command != Command_None)
-      {
-        enqueueCommOnFace(tryTransferToFace, command, TransferType_Bug);
-      }
+      case 0: offset = 3; break;
+      case 1: offset = 2; break;
+      case 2: offset = 3; break;
+      case 3: offset = 4; break;
     }
-    else if (bugDistance < 0)
-    {
-      bugDistance = 0;
-      bugDirection = 1;
-      // Pick a different corner
-      char offset = 3;
-      switch (millis() & 0x3)
-      {
-        case 0: offset = 3; break;
-        case 1: offset = 2; break;
-        case 2: offset = 3; break;
-        case 3: offset = 4; break;
-      }
-      bugTargetCorner = CW_FROM_FACE(bugTargetCorner, offset);
-    }
+    bugTargetCorner = CW_FROM_FACE(bugTargetCorner, offset);
   }
 }
 
@@ -1657,7 +1628,7 @@ void evaporateWater()
 
 void render()
 {
-  Color color;//, color2;
+  Color color;
 
   setColor(color);
 
@@ -1678,11 +1649,11 @@ void render()
     {
       switch (rainbowIndex)
       {
-        case 0: color = makeColorRGB(COLOR_RAINBOW_2); break;// color2 = makeColorRGB(COLOR_RAINBOW_1); break;
-        case 1: color = makeColorRGB(COLOR_RAINBOW_4); break;//color2 = makeColorRGB(COLOR_RAINBOW_3); break;
-        case 2: color = makeColorRGB(COLOR_RAINBOW_6); break;//color2 = makeColorRGB(COLOR_RAINBOW_5); break;
-        case 3: color = makeColorRGB(COLOR_RAINBOW_8); break;//color2 = makeColorRGB(COLOR_RAINBOW_7); break;
-        case 4: color = makeColorRGB(COLOR_RAINBOW_10); break;//color2 = makeColorRGB(COLOR_RAINBOW_9); break;
+        case 0: color = makeColorRGB(COLOR_RAINBOW_1); break;
+        case 1: color = makeColorRGB(COLOR_RAINBOW_4); break;
+        case 2: color = makeColorRGB(COLOR_RAINBOW_6); break;
+        case 3: color = makeColorRGB(COLOR_RAINBOW_8); break;
+        case 4: color = makeColorRGB(COLOR_RAINBOW_10); break;
       }
     }
 
@@ -1690,15 +1661,6 @@ void render()
     {
       setColor(color);
     }
-
-    /*
-    if (!rainbowTimer.isExpired())
-    {
-      setColorOnFace2(&color2, rainbowDirection);
-      setColorOnFace2(&color2, (rainbowDirection == 0) ? 5 : (rainbowDirection - 1));
-      setColorOnFace2(&color2, (rainbowDirection == 5) ? 0 : (rainbowDirection + 1));
-    }
-    */
   }
 
   // Water comes next
@@ -1722,9 +1684,9 @@ void render()
     plantNumLeaves = 0;
     plantNumBranches = 0;
   
-    for(uint8_t f = 0; f <= 4 ; ++f) // one short because face 5 is never used
+    for(uint8_t f = 0; f <= 4 ; ++f) // one short because face 5 isn't used
     {
-      // Face 1 is also never used
+      // Face 1 is also not used
       if (f != 1)
       {
         byte lutIndex = lutBits & 0x3;
