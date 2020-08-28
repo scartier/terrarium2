@@ -17,9 +17,7 @@
 // * Added setColorOnFace2 to accept a pointer instead of raw Color value
 // * Simplified sun system (leaves & branches don't block sun)
 // * Genericized systems (evaporation, bug transfer)
-
-// Nice-to-haves:
-// * Sun pulses do half and half to show direction within the tile
+// * Remove sun/rainbow
 
 #define null 0
 
@@ -32,6 +30,9 @@
 #define DEBUG_PLANT_ENERGY  0
 #define DEBUG_SPAWN_BUG     0
 
+#define INCLUDE_FLORA       0
+#define INCLUDE_FAUNA       0
+
 #if TRACK_FRAME_TIME
 unsigned long currentTime = 0;
 byte frameTime;
@@ -39,11 +40,12 @@ byte worstFrameTime = 0;
 #endif
 
 #if USE_DATA_SPONGE
-byte sponge[25];
+byte sponge[60];
 // Aug 20: 45-49 bytes
 // Aug 21: 50, 17 
 // Aug 22: 10, 5
 // Aug 23: 24
+// Aug 26 flora: 55-59
 #endif
 
 #define MAX(x,y) ((x) > (y) ? (x) : (y))
@@ -69,30 +71,22 @@ byte sponge[25];
 
 #define HUE_DIRT              32    // HSB=32,255,255   RGB=255,191,0     HSB=32,255,128   RGB=128,96,0
 #define RGB_DIRT        128,96,0
+#define RGB_DIRT_FERTILE 96,128,0
 
-#define HUE_SUN               42    // HSB=42,255,255   RGB=255,251,0     HSB=42,255,192   RGB=191,188,0
-                                    // HSB=42,255,128   RGB=128,125,0     HSB=42,255,64    RGB=64,63,0
-#define RGB_SUN        255,251,0
-#define RGB_SUN_PULSE    64,63,0
-                                    
 #define HUE_BUG               55    // HSB=55,255,255   RGB=179,255,0     HSB=55,255,192   RGB=134,191,0
-#define RGB_BUG_OFF    134,191,0
-#define RGB_BUG_ON     179,255,0
+#define RGB_BUG        179,255,0
 
 #define HUE_WATER            171    // HSB=171,255,128  RGB=2,0,128
 #define RGB_WATER        2,0,128
 
 #define HUE_LEAF              85    // HSB=85,255,255   RGB=0,255,0       HSB=85,255,192   RGB=0,191,0
-#define RGB_LEAF_OFF     0,191,0
-#define RGB_LEAF_ON      0,255,0
+#define RGB_LEAF         0,255,0
 
 #define HUE_BRANCH            28    // HSB=28,255,160   RGB=161,107,0     HSB=28,255,192   RGB=191,128,0
-#define RGB_BRANCH_OFF 161,107,0
-#define RGB_BRANCH_ON  191,128,0
+#define RGB_BRANCH     191,128,0
 
 #define HUE_FLOWER           233    // HSB=233,255,255  RGB=255,0,132     HSB=233,255,192  RGB=191,0,99
-#define RGB_FLOWER_OFF 192,160,160// 191,0,99
-#define RGB_FLOWER_ON  255,192,192//255,0,132
+#define RGB_FLOWER   255,192,192
 
 #if DEBUG_COLORS
 #define COLOR_PLANT_GROWTH1 makeColorRGB( 128,  0,  64)
@@ -149,18 +143,17 @@ FaceState faceStates[FACE_COUNT];
 enum Command
 {
   Command_None,
-  Command_SetWaterFull,   // Tells neighbor we are full of water
-  Command_WaterAdd,       // Adds water to this face
-  Command_GravityDir,     // Propagates the gravity direction
-  Command_DistEnergy,     // Distribute plant energy
-  Command_SendSun,        // Send sunlight from Sun tiles
-  Command_GatherSun,      // Gather sun from leaves to root
-  Command_TransferBug,    // Attempt to transfer a bug from one tile to another (must be confirmed)
-  Command_TransferBugCW,  // Same as above, but transfer to the face CW from the receiver
-  Command_BugAccepted,    // Confirmation of the transfer - sender must tolerate this never arriving, or arriving late
-  Command_RainbowCheck,   // Follows a sunbeam looking for a rainbow
-  Command_RainbowFound,   // Found a rainbow!
-  Command_ChildBranchGrew,// Sent down a plant to tell it that something grew
+  Command_SetWaterFull,     // Tells neighbor we are full of water
+  Command_WaterAdd,         // Adds water to this face
+  Command_GravityDir,       // Propagates the gravity direction
+  Command_DistEnergy,       // Distribute plant energy
+  Command_TransferBug,      // Attempt to transfer a bug from one tile to another (must be confirmed)
+  Command_TransferBugCW,    // Same as above, but transfer to the face CW from the receiver
+  Command_BugAccepted,      // Confirmation of the transfer - sender must tolerate this never arriving, or arriving late
+  Command_ChildBranchGrew,  // Sent down a plant to tell it that something grew
+  Command_GatherSun,        // Plant leaves gather sun and send it down to the root
+  Command_QueryPlantType,   // Ask the root what plant should grow
+  Command_PlantType,        // Sending the plant type
 
 #if DEBUG_COMMS
   Command_UpdateState,
@@ -204,12 +197,11 @@ Timer gravityTimer;
 
 enum TileFlags
 {
-  TileFlag_HasDripper = 1<<0,
-  TileFlag_HasDirt    = 1<<1,
-  TileFlag_HasSun     = 1<<2,
-  TileFlag_PulseSun   = 1<<3,
-  TileFlag_SpawnedBug = 1<<4,
-  TileFlag_HasBug     = 1<<5,
+  TileFlag_HasDripper    = 1<<0,
+  TileFlag_HasDirt       = 1<<1,
+  TileFlag_DirtIsFertile = 1<<2,
+  TileFlag_SpawnedBug    = 1<<4,
+  TileFlag_HasBug        = 1<<5,
 };
 byte tileFlags = 0;
 
@@ -233,9 +225,6 @@ byte dripperSpeedScale = 0;
 #define EVAPORATION_RATE 5000
 Timer evaporationTimer;
 
-#define WATER_FELL_TIMEOUT 2000
-Timer waterFellTimer;
-
 // -------------------------------------------------------------------------------------------------
 // GRAVITY
 //
@@ -257,9 +246,8 @@ byte gravityUpFace = 0;
 #define PLANT_ENERGY_RATE 5000
 Timer plantEnergyTimer;
 
-// Timer that controls how often a plant can grow (or wither)
-#define PLANT_GROWTH_RATE 5000
-Timer plantGrowthTimer;
+#define PLANT_ENERGY_FROM_WATER 3
+#define PLANT_ENERGY_PER_SUN    1
 
 // -------------------------------------------------------------------------------------------------
 // PLANT
@@ -271,24 +259,6 @@ enum PlantExitFace
   PlantExitFace_Fork,
 };
 
-/*
-struct PlantStateNode
-{
-  // Energy and state progression
-  byte energyMaintain     : 1;  // plant energy required to stay alive (1 or 2)
-  byte energyGrow         : 2;  // plant energy required to progress to the next state
-  byte growState1         : 2;  // state offset when growing (1) [0=no growth, 1=+1, 2=+2, 3=+?]
-  byte growState2         : 2;  // state offset when growing (2) [same, but also added to growState1]
-  byte witherState        : 2;  // state offset (backwards) when withering (0=dead)
-
-  // Growth into neighbors
-  PlantExitFace exitFace  : 2;  // none, one across, fork
-
-  // Render info
-  int  faceLUTIndexes     : 12; // color lookup for each face (none, leaf, branch, flower)
-};
-*/
-
 struct PlantStateNode
 {
   // Energy and state progression
@@ -298,7 +268,7 @@ struct PlantStateNode
   byte witherState        : 4;  // state offset (backwards) when withering (0=dead)
   
   // Flags
-  byte waitForGrowth      : 1;  // flag to only proceed once a child branch has gathered sun
+  byte waitForGrowth      : 1;  // flag to only proceed once a child branch has grown
 
   // Growth into neighbors
   PlantExitFace exitFace  : 2;  // none, one across, fork
@@ -320,8 +290,7 @@ PlantStateNode plantStateGraphTree[] =
 
 // BRANCHES
 //  E   G1 G2 W   WFG  EXITS                      R  4 3 2 0
-  { 1,  1, 0, 0,  0,   PlantExitFace_None,        0b00000000 }, // START
-  { 2,  1, 0, 0,  0,   PlantExitFace_None,        0b00000000 }, // GROWING
+  { 3,  1, 0, 0,  0,   PlantExitFace_None,        0b00000000 }, // START
   { 3,  2, 0, 0,  0,   PlantExitFace_None,        0b00000001 }, // BASE LEAF
   { 3,  1, 0, 2,  0,   PlantExitFace_None,        0b00000010 }, // BASE BRANCH
   { 3,  1, 1, 1,  0,   PlantExitFace_None,        0b00010010 }, // BASE BRANCH + CENTER LEAF (CHOICE)
@@ -360,6 +329,24 @@ PlantStateNode plantStateGraphTree[] =
   { 0,  0, 0, 3,  0,   PlantExitFace_OneAcross,   0b01100110 }, // BASE BRANCH + CENTER BRANCH + TWO LEAVES
 };
 
+PlantStateNode *plantStateGraphs[] =
+{
+  plantStateGraphTree,
+};
+
+int plantBranchStartIndexes[] =
+{
+  6,
+};
+
+enum PlantType
+{
+  PlantType_None = -1,
+  PlantType_Tree = 0,
+  PlantType_Vine,
+  PlantType_Seaweed
+};
+
 enum PlantFaceType
 {
   PlantFaceType_None,
@@ -368,7 +355,13 @@ enum PlantFaceType
   PlantFaceType_Flower
 };
 
-bool hasPlant;
+// Timer that controls how often a plant must pay its maintenance cost or else wither.
+// Should be slightly longer than the energy distribution rate so there's always time
+// for energy to get there first.
+#define PLANT_MAINTAIN_RATE (PLANT_ENERGY_RATE + 2000)
+Timer plantMaintainTimer;
+
+char plantType = PlantType_None;
 byte plantStateNodeIndex;
 byte plantRootFace;
 byte plantEnergy;
@@ -381,51 +374,9 @@ bool plantChildBranchGrew;   // flag that a child branch has grown somewhere in 
 byte plantNumLeaves;
 byte plantNumBranches;
 
-// -------------------------------------------------------------------------------------------------
-// SUN
-//
-#define SUN_STRENGTH 3
-#define GENERATE_SUN_RATE 500
-Timer generateSunTimer;
-
-byte sunDirection = 3;
-
-#define SUN_PULSE_RATE 250
-Timer sunPulseTimer;
-
-#define SUN_LIT_RATE 1000    // longer than GENERATE_SUN_RATE so it stays set while sun is shining
-Timer sunLitTimer;
-
-// Most gathered sunlight a tile can hold
-// The practical max will be a lot lower than this because leaves only collect 1 unit at a time
+// Sun
 #define MAX_GATHERED_SUN 200
 byte gatheredSun;
-
-#define ENERGY_PER_SUN 3
-
-// -------------------------------------------------------------------------------------------------
-// RAINBOW
-//
-#define RAINBOW_TIMEOUT 2000
-Timer rainbowTimer;
-
-byte rainbowIndex;
-byte rainbowDirection;
-
-#define RAINBOW_INTENSITY1  255
-#define RAINBOW_INTENSITY2  192
-#define RAINBOW_INTENSITY3  128
-
-#define COLOR_RAINBOW_1  RAINBOW_INTENSITY1,                  0,                  0
-#define COLOR_RAINBOW_2  RAINBOW_INTENSITY1, RAINBOW_INTENSITY3,                  0
-#define COLOR_RAINBOW_3  RAINBOW_INTENSITY1, RAINBOW_INTENSITY2,                  0
-#define COLOR_RAINBOW_4  RAINBOW_INTENSITY1, RAINBOW_INTENSITY1,                  0
-#define COLOR_RAINBOW_5  RAINBOW_INTENSITY2, RAINBOW_INTENSITY1,                  0
-#define COLOR_RAINBOW_6  RAINBOW_INTENSITY3, RAINBOW_INTENSITY1,                  0
-#define COLOR_RAINBOW_7                   0, RAINBOW_INTENSITY1,                  0
-#define COLOR_RAINBOW_8                   0, RAINBOW_INTENSITY1, RAINBOW_INTENSITY1
-#define COLOR_RAINBOW_9                   0,                  0, RAINBOW_INTENSITY1
-#define COLOR_RAINBOW_10 RAINBOW_INTENSITY3,                  0, RAINBOW_INTENSITY1
 
 // -------------------------------------------------------------------------------------------------
 // BUG
@@ -701,9 +652,8 @@ void loop()
   loopDripper();
   loopWater();
   loopGravity();
-  loopSun();
   loopDirt();
-  loopPlant();    // call after loopDirt
+  loopPlantMaintain();
   loopBug();
 
   // Update water levels and such
@@ -742,7 +692,7 @@ void handleUserInput()
       }
       else
       {
-        tileFlags |= TileFlag_HasBug;
+        trySpawnBug();
       }
     }
 #endif
@@ -762,12 +712,6 @@ void handleUserInput()
     else if (tileFlags & TileFlag_HasDirt)
     {
       tileFlags &= ~TileFlag_HasDirt;
-      tileFlags |= TileFlag_HasSun;
-      sunDirection = 3;
-    }
-    else if (tileFlags & TileFlag_HasSun)
-    {
-      tileFlags &= ~TileFlag_HasSun;
     }
     else
     {
@@ -781,16 +725,15 @@ void handleUserInput()
     // Adjust dripper speed or sun direction
     if (tileFlags & TileFlag_HasDripper)
     {
-        dripperSpeedScale++;
-        if (dripperSpeedScale > 2)
-        {
-          dripperSpeedScale = 0;
-        }
+      dripperSpeedScale++;
+      if (dripperSpeedScale > 2)
+      {
+        dripperSpeedScale = 0;
+      }
     }
-    else if (tileFlags & TileFlag_HasSun)
+    else if (tileFlags & TileFlag_HasDirt)
     {
-      // Cycle around the sun directions
-      sunDirection = (sunDirection == 5) ? 0 : (sunDirection + 1);
+      tileFlags ^= TileFlag_DirtIsFertile;
     }
   }
 }
@@ -819,8 +762,6 @@ void resetOurState()
     faceState->waterAdded = 0;
     faceState->waterStored = 0;
   }
-
-  gatheredSun = 0;
   
   resetPlantState();
   
@@ -877,58 +818,20 @@ void processCommForFace(Command command, byte value, byte f)
       // EASTER EGG: Dirt tiles normally start a plant and thus do not accept energy,
       //             but if another plant can attach to face 3 beneath the dirt tile
       //             then it can pass along excess energy. Probably not useful?
-      if (!hasPlant || plantRootFace == f)
+      if ((plantType == PlantType_None) || plantRootFace == f)
       {
         plantEnergy += value;
         plantRootFace = f;
 
         // Need to find out what kind of plant to grow - query the root
-        if (!hasPlant)
+        if (plantType == PlantType_None)
         {
-          hasPlant = true;
-          plantStateNodeIndex = 6;
+          enqueueCommOnFace(plantRootFace, Command_QueryPlantType, 0);
         }
-      }
-      break;
-
-    case Command_SendSun:
-      tileFlags |= TileFlag_PulseSun;
-
-      // Plant leaves absorb sunlight
-      // Send the rest in the same direction
-      if (hasPlant)
-      {
-        // Leaves absorb the sun
-//        byte sunGatheredByLeaves = MIN(value, plantNumLeaves);
-//        gatheredSun = sunGatheredByLeaves;
-//        value -= sunGatheredByLeaves;
-        gatheredSun = plantNumLeaves;
-        
-        // Branches just block the sun
-//        byte sunBlockedByBranches = MIN(value, plantNumBranches);
-//        value -= sunBlockedByBranches;
-      }
-    
-      if (tileFlags & TileFlag_HasDirt)
-      {
-        // Dirt blocks all sunlight
-        value = 0;
-      }
-  
-      // Any remaining sun gets sent on to the opposite face
-      if (value > 0)
-      {
-        enqueueCommOnFace(oppositeFace, Command_SendSun, value);
-      }
-      break;
-      
-    case Command_GatherSun:
-      // Plants propagate the sun until it gets to the root in the dirt
-      if (hasPlant)
-      {
-        if (gatheredSun < MAX_GATHERED_SUN)
+        else
         {
-          gatheredSun += value;
+          // Just received some energy - check if plant can grow
+          loopPlantGrow();
         }
       }
       break;
@@ -954,58 +857,37 @@ void processCommForFace(Command command, byte value, byte f)
       tileFlags &= ~TileFlag_HasBug;
       break;
 
-    case Command_RainbowCheck:
-      // Must have sun for a rainbow
-      if (!sunLitTimer.isExpired())
-      {
-        byte incAmount = 1;
-        if (waterFellTimer.isExpired() && value < 3)
-        {
-          incAmount = 0;
-        }
-        value += incAmount;
-        if (value >= 5)
-        {
-          // Found enough for a rainbow!
-          rainbowIndex = value - 1;
-          rainbowDirection = f;
-          rainbowTimer.set(RAINBOW_TIMEOUT);
-
-          // Send a message back up the chain
-          value -= 2;
-          enqueueCommOnFace(f, Command_RainbowFound, value);
-        }
-        else
-        {
-          // Not enough for a rainbow yet
-          // Pass on the new value
-          enqueueCommOnFace(oppositeFace, Command_RainbowCheck, value);
-        }
-      }
-      break;
-
-    case Command_RainbowFound:
-      // Show our part of the rainbow!
-      rainbowIndex = value;
-      rainbowTimer.set(RAINBOW_TIMEOUT);
-      rainbowDirection = oppositeFace;
-
-      // Propagate the message until it depletes
-      if (value >= 1)
-      {
-        value--;
-        enqueueCommOnFace(oppositeFace, Command_RainbowFound, value);
-      }
-      break;
-
     case Command_ChildBranchGrew:
-      if (hasPlant)
+      if (plantType != PlantType_None)
       {
         plantChildBranchGrew = true;
         if (!(tileFlags & TileFlag_HasDirt))
         {
           enqueueCommOnFace(plantRootFace, Command_ChildBranchGrew, 0);
         }
+      }
+      break;
+
+    case Command_GatherSun:
+      if (gatheredSun < MAX_GATHERED_SUN)
+      {
+        gatheredSun += value;
+      }
+      break;
+
+    case Command_QueryPlantType:
+      if (plantType != PlantType_None)
+      {
+        // Send the plant type back
+        enqueueCommOnFace(f, Command_PlantType, plantType);
+      }
+      break;
+
+    case Command_PlantType:
+      if (plantType == PlantType_None)
+      {
+        plantType = value;
+        plantStateNodeIndex = plantBranchStartIndexes[plantType];
       }
       break;
       
@@ -1127,10 +1009,6 @@ void loopWater()
           {
             enqueueCommOnFace(dstFace, Command_WaterAdd, amountToSend);
             faceStateSrc->waterLevel -= amountToSend;
-            if (faceStateSrc->waterLevel == 0)
-            {
-                waterFellTimer.set(WATER_FELL_TIMEOUT);
-            }
           }
         }
       }
@@ -1138,10 +1016,6 @@ void loopWater()
       {
         faceStateDst->waterAdded += amountToSend;
         faceStateSrc->waterLevel -= amountToSend;
-        if (faceStateSrc->waterLevel == 0)
-        {
-          waterFellTimer.set(WATER_FELL_TIMEOUT);
-        }
       }
     }
   }
@@ -1200,12 +1074,19 @@ void loopDirt()
   {
     return;
   }
+  plantEnergyTimer.set(PLANT_ENERGY_RATE);
 
   if (!(tileFlags & TileFlag_HasDirt))
   {
     return;
   }
 
+  // Dirt must be set to fertile for it to grow plants
+  if (!(tileFlags & TileFlag_DirtIsFertile))
+  {
+    return;
+  }
+  
   byte *reservoir = &faceStates[3].waterStored;
   if (*reservoir == 0)
   {
@@ -1214,17 +1095,17 @@ void loopDirt()
 
   // Energy generation formula:
   // Up to X water = X energy (so that a plant can sprout without needing sunlight)
-  // After that Y water + Y sun = ENERGY_PER_SUN*Y energy
+  // After that Y water + Y sun = PLANT_ENERGY_PER_SUN*Y energy
 
   // X water
-  byte energyToDistribute = (*reservoir > 5) ? 5 : *reservoir;
+  byte energyToDistribute = (*reservoir > PLANT_ENERGY_FROM_WATER) ? PLANT_ENERGY_FROM_WATER : *reservoir;
   *reservoir -= energyToDistribute;
 
   // Y sun + Y water
   byte minWaterOrSun = MIN(*reservoir, gatheredSun);
   *reservoir -= minWaterOrSun;
   gatheredSun = 0;
-  energyToDistribute += minWaterOrSun * ENERGY_PER_SUN;
+  energyToDistribute += minWaterOrSun * PLANT_ENERGY_PER_SUN;
 
   // Don't generate any energy if the plant is submerged
   // Only need to check the three faces above ground
@@ -1235,59 +1116,33 @@ void loopDirt()
     energyToDistribute = 0;
   }
 
-  plantEnergy = energyToDistribute;
+  plantEnergy += energyToDistribute;
+  loopPlantGrow();
 }
 
 // -------------------------------------------------------------------------------------------------
 // PLANTS
 // -------------------------------------------------------------------------------------------------
 
-void loopPlant()
+void loopPlantMaintain()
 {
   // Plants use energy periodically to stay alive and grow
 
-  if (!plantEnergyTimer.isExpired())
+  if (!plantMaintainTimer.isExpired())
+  {
+    return;
+  }
+  plantMaintainTimer.set(PLANT_MAINTAIN_RATE);
+
+  if (plantType == PlantType_None)
   {
     return;
   }
 
-  if (!hasPlant)
-  {
-    if (plantEnergy == 0)
-    {
-      // No plant growing and no energy to try starting one
-      return;
-    }
-
-    if (!(tileFlags & TileFlag_HasDirt))
-    {
-      // No dirt - can't start a plant
-      return;
-    }
-    
-    // Try to start growing a new plant
-    // TODO : Different plant types!
-    hasPlant = true;
-    plantStateNodeIndex = 0;
-    plantRootFace = 3;
-  }
-
-#if DEBUG_PLANT_ENERGY
-  debugPlantEnergy = plantEnergy;
-#endif
-
-  // Handle gathered sunlight
-  // Transmit it down to the root
-  if (gatheredSun > 0)
-  {
-    enqueueCommOnFace(plantRootFace, Command_GatherSun, gatheredSun);
-    gatheredSun = 0;
-  }
-  
-  PlantStateNode *plantStateNode = &plantStateGraphTree[plantStateNodeIndex];
+  PlantStateNode *plantStateNode = &plantStateGraphs[plantType][plantStateNodeIndex];
 
   // Use energy to maintain the current state
-  byte energyMaintain = 1 + plantNumLeaves;
+  byte energyMaintain = 1;//plantNumLeaves > 0 ? 2 : 1;
   if (plantEnergy < energyMaintain)
   {
     // Not enough energy - plant is dying
@@ -1306,11 +1161,68 @@ void loopPlant()
 
   // Have enough energy to maintain - deduct it
   plantEnergy -= energyMaintain;
+}
+
+void loopPlantGrow()
+{
+  // Plants use energy to stay alive and grow
+  // Potential growth is triggered when this tile receives plant energy from the root
+
+  // Try to grow a new plant if we don't have one already and the ground is fertile
+  if (plantType == PlantType_None)
+  {
+    if (plantEnergy == 0)
+    {
+      // No plant growing and no energy to try starting one
+      return;
+    }
+
+    if (!(tileFlags & TileFlag_HasDirt))
+    {
+      // No dirt or not fertile - can't start a plant
+      return;
+    }
+    
+    // Try to start growing a new plant
+    // TODO : Different plant types!
+    plantType = PlantType_Tree;
+    plantStateNodeIndex = 0;
+    plantRootFace = 3;
+  }
+
+  // First thing, send gathered sun down to the root
+  gatheredSun += plantNumLeaves;
+  if (gatheredSun > 0)
+  {
+    enqueueCommOnFace(plantRootFace, Command_GatherSun, gatheredSun);
+  }
+
+#if DEBUG_PLANT_ENERGY
+  debugPlantEnergy = plantEnergy;
+#endif
+
+  PlantStateNode *plantStateNode = &plantStateGraphs[plantType][plantStateNodeIndex];
+
+  // Use energy to maintain the current state
+  byte energyMaintain = 1;
+  if (plantEnergy <= energyMaintain)
+  {
+    // Not enough energy to do anything
+    return;
+  }
   
-  // Is there enough extra energy to grow?
+  byte energyForGrowth = plantEnergy - energyMaintain;
+  plantEnergy -= energyForGrowth;
+
+  // Normally unused energy gets sent to child branches or is wasted
+  // If no growth occurred then save our energy for next time
+  bool retainEnergy = false;
+
+  // Can we grow?
   if (plantStateNode->growState1 != 0)
   {
-    if (plantEnergy >= plantStateNode->energyGrow)
+    // Is there enough energy to grow?
+    if (energyForGrowth >= plantStateNode->energyGrow)
     {
       // Some states wait for a child branch to grow
       if (!plantStateNode->waitForGrowth || plantChildBranchGrew)
@@ -1327,7 +1239,7 @@ void loopPlant()
         }
   
         // Deduct energy and grow!
-        plantEnergy -= plantStateNode->energyGrow;
+        energyForGrowth -= plantStateNode->energyGrow;
         plantStateNodeIndex += stateOffset;
 
         // Next state might need to wait for a child branch!
@@ -1337,12 +1249,18 @@ void loopPlant()
         enqueueCommOnFace(plantRootFace, Command_ChildBranchGrew, 0);
       }
     }
+    else
+    {
+      // Didn't grow so hold on to all our energy so maybe we can next time
+      plantEnergy += energyForGrowth;
+      return;
+    }
   }
 
   // Pass on any unused energy
   if (plantStateNode->exitFace != PlantExitFace_None)
   {
-    byte energyToSend = (plantStateNode->exitFace == PlantExitFace_Fork) ? (plantEnergy >> 1) : plantEnergy;
+    byte energyToSend = (plantStateNode->exitFace == PlantExitFace_Fork) ? (energyForGrowth >> 1) : energyForGrowth;
     energyToSend = MIN(15, energyToSend);
 
     if (energyToSend > 0)
@@ -1358,57 +1276,31 @@ void loopPlant()
         case PlantExitFace_Fork:
           exitFace = CW_FROM_FACE(plantRootFace, 2);
           enqueueCommOnFace(exitFace, Command_DistEnergy, energyToSend);
+
+          // Adjust in case of rounding
+          // This means the right fork will always get more energy than the left
+          energyToSend = MIN(15, energyForGrowth - energyToSend);
+          
           byte exitFace = CW_FROM_FACE(plantRootFace, 4);
           enqueueCommOnFace(exitFace, Command_DistEnergy, energyToSend);
           break;
       }
     }
   }
-
-  // Leftover energy is wasted
-  plantEnergy = 0;
 }
 
 void resetPlantState()
 {
-  hasPlant = false;
+  plantType = PlantType_None;
   plantEnergy = 0;
   plantChildBranchGrew = false;
+  gatheredSun = 0;
+#if DEBUG_PLANT_ENERGY
+  debugPlantEnergy = 0;
+#endif
 
   // Allow a new bug to spawn
   tileFlags &= ~TileFlag_SpawnedBug;
-}
-
-// -------------------------------------------------------------------------------------------------
-// SUN
-// -------------------------------------------------------------------------------------------------
-
-void loopSun()
-{
-  if (!(tileFlags & TileFlag_HasSun))
-  {
-    return;
-  }
-  
-  if (!generateSunTimer.isExpired())
-  {
-    return;
-  }
-  
-  // Send out sunlight in the appropriate direction
-  enqueueCommOnFace(sunDirection, Command_SendSun, SUN_STRENGTH);
-  tileFlags |= TileFlag_PulseSun;
-
-  // Check for rainbows in certain directions of sunlight
-  // Must be relative to gravity's up direction
-  byte downLeft = CW_FROM_FACE(gravityUpFace, 4);
-  byte downRight = CW_FROM_FACE(gravityUpFace, 2);
-  if (sunDirection == downLeft || sunDirection == downRight)
-  {
-    enqueueCommOnFace(sunDirection, Command_RainbowCheck, 0);
-  }
-
-  generateSunTimer.set(GENERATE_SUN_RATE);
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1421,20 +1313,6 @@ void loopBug()
   {
     return;
   }
-
-/*
-  // Submerged bugs die :(
-  if (faceStates[0].flags & FaceFlag_WaterFull &&
-      faceStates[1].flags & FaceFlag_WaterFull &&
-      faceStates[2].flags & FaceFlag_WaterFull &&
-      faceStates[3].flags & FaceFlag_WaterFull &&
-      faceStates[4].flags & FaceFlag_WaterFull &&
-      faceStates[5].flags & FaceFlag_WaterFull)
-  {
-    tileFlags &= ~TileFlag_HasBug;
-    return;
-  }
-  */
 
   // Did the bug flap its wings?
   if (!bugFlapTimer.isExpired())
@@ -1527,15 +1405,11 @@ void postProcessState()
   accumulateWater();
   evaporateWater();
 
-  // These timers are used by multiple systems
+  // Timers here are used by multiple systems
   // So need to reset here after all system processing
   if (gravityTimer.isExpired())
   {
     gravityTimer.set(GRAVITY_RATE);
-  }
-  if (plantEnergyTimer.isExpired())
-  {
-    plantEnergyTimer.set(PLANT_ENERGY_RATE);
   }
 }
 
@@ -1626,38 +1500,7 @@ void render()
 
   setColor(color);
 
-  // Sun in the very background
-  {
-    if (tileFlags & TileFlag_PulseSun)
-    {
-      tileFlags &= ~TileFlag_PulseSun;
-      sunPulseTimer.set(SUN_PULSE_RATE);
-      sunLitTimer.set(SUN_LIT_RATE);
-    }
-
-    // Default to normal sun
-    color = makeColorRGB(RGB_SUN_PULSE);
-
-    // Rainbow overrides that
-    if (!rainbowTimer.isExpired())
-    {
-      switch (rainbowIndex)
-      {
-        case 0: color = makeColorRGB(COLOR_RAINBOW_1); break;
-        case 1: color = makeColorRGB(COLOR_RAINBOW_4); break;
-        case 2: color = makeColorRGB(COLOR_RAINBOW_6); break;
-        case 3: color = makeColorRGB(COLOR_RAINBOW_8); break;
-        case 4: color = makeColorRGB(COLOR_RAINBOW_10); break;
-      }
-    }
-
-    if (!sunPulseTimer.isExpired() || !rainbowTimer.isExpired())
-    {
-      setColor(color);
-    }
-  }
-
-  // Water comes next
+  // WATER
   color = makeColorRGB(RGB_WATER);
   FOREACH_FACE(f)
   {
@@ -1668,9 +1511,9 @@ void render()
   }
 
   // PLANTS
-  if (hasPlant)
+  if (plantType != PlantType_None)
   {
-    PlantStateNode *plantStateNode = &plantStateGraphTree[plantStateNodeIndex];
+    PlantStateNode *plantStateNode = &plantStateGraphs[plantType][plantStateNodeIndex];
   
     int lutBits = plantStateNode->faceLUTIndexes;
     byte targetFace = plantRootFace;
@@ -1688,9 +1531,9 @@ void render()
         {
           switch (lutIndex)
           {
-            case PlantFaceType_Leaf:   plantNumLeaves++;   color = sunLitTimer.isExpired() ? makeColorRGB(RGB_LEAF_OFF)   : makeColorRGB(RGB_LEAF_ON); break;
-            case PlantFaceType_Branch: plantNumBranches++; color = sunLitTimer.isExpired() ? makeColorRGB(RGB_BRANCH_OFF) : makeColorRGB(RGB_BRANCH_ON); break;
-            case PlantFaceType_Flower: plantNumLeaves++;   color = sunLitTimer.isExpired() ? makeColorRGB(RGB_FLOWER_OFF) : makeColorRGB(RGB_FLOWER_ON); trySpawnBug(); break;
+            case PlantFaceType_Leaf:   plantNumLeaves++;   color = makeColorRGB(RGB_LEAF);   break;
+            case PlantFaceType_Branch: plantNumBranches++; color = makeColorRGB(RGB_BRANCH); break;
+            case PlantFaceType_Flower: plantNumLeaves++;   color = makeColorRGB(RGB_FLOWER); trySpawnBug(); break;
           }
           setColorOnFace2(&color, targetFace);
         }
@@ -1700,10 +1543,10 @@ void render()
     }
   }
 
-  // Bug in front of plant
+  // BUG
   if (tileFlags & TileFlag_HasBug)
   {
-    color = sunLitTimer.isExpired() ? makeColorRGB(RGB_BUG_OFF) : makeColorRGB(RGB_BUG_ON);
+    color = makeColorRGB(RGB_BUG);
     setColorOnFace2(&color, CW_FROM_FACE(bugTargetCorner, bugFlapOpen ? 0 : 1));
     setColorOnFace2(&color, CW_FROM_FACE(bugTargetCorner, bugFlapOpen ? 5 : 4));
   }
@@ -1715,19 +1558,16 @@ void render()
     setColorOnFace2(&color, 0);
   }
   
-  if (tileFlags & TileFlag_HasSun)
-  {
-    byte targetFace = CW_FROM_FACE(sunDirection, 3);
-    color = makeColorRGB(RGB_SUN);
-    setColorOnFace2(&color, targetFace);
-  }
-
   if (tileFlags & TileFlag_HasDirt)
   {
     color = makeColorRGB(RGB_DIRT);
     setColorOnFace2(&color, 2);
-    setColorOnFace2(&color, 3);
     setColorOnFace2(&color, 4);
+    if (tileFlags & TileFlag_DirtIsFertile)
+    {
+      color = makeColorRGB(RGB_DIRT_FERTILE);
+    }
+    setColorOnFace2(&color, 3);
   }
 
 #if DEBUG_COLORS
