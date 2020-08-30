@@ -40,13 +40,14 @@ byte worstFrameTime = 0;
 #endif
 
 #if USE_DATA_SPONGE
-byte sponge[49];
+byte sponge[23];
 // Aug 20: 45-49 bytes
 // Aug 21: 50, 17 
 // Aug 22: 10, 5
 // Aug 23: 24
 // Aug 26 flora: 55-59
 // Aug 29 before plant state reduction: 22, (after) 48
+// Aug 30 after making plant parameter table: 21, 23
 #endif
 
 #define MAX(x,y) ((x) > (y) ? (x) : (y))
@@ -81,9 +82,6 @@ byte sponge[49];
 #define RGB_WATER        0,0,96
 
 #define HUE_LEAF              85    // HSB=85,255,255   RGB=0,255,0       HSB=85,255,192   RGB=0,191,0
-#define RGB_LEAF         0,255,0
-#define RGB_LEAF_VINE    0,192,32
-#define RGB_LEAF_SEAWEED 128,160,0
 
 #define HUE_BRANCH            28    // HSB=28,255,160   RGB=161,107,0     HSB=28,255,192   RGB=191,128,0
 #define RGB_BRANCH     191,128,0
@@ -256,6 +254,16 @@ Timer plantEnergyTimer;
 // -------------------------------------------------------------------------------------------------
 // PLANT
 //
+enum PlantType
+{
+  PlantType_Tree,
+  PlantType_Vine,
+  PlantType_Seaweed,
+  PlantType_Bush,
+  
+  PlantType_None = 99
+};
+
 enum PlantExitFace
 {
   PlantExitFace_None,
@@ -281,6 +289,14 @@ struct PlantStateNode
   byte faceRenderIndex    : 4;
 };
 
+enum PlantFaceType
+{
+  PlantFaceType_None,
+  PlantFaceType_Leaf,
+  PlantFaceType_Branch,
+  PlantFaceType_Flower
+};
+
 byte plantRenderLUTIndexes[] = 
 {//  4 3 2 0
   0b00000000,   //  0: EMPTY
@@ -296,6 +312,9 @@ byte plantRenderLUTIndexes[] =
   0b10011010,   // 10: BASE BRANCH + FORK BRANCHES + CENTER LEAF
   0b00110010,   // 11: BASE BRANCH + FLOWER
   0b01110110,   // 12: BASE BRANCH + FLOWER + SIDE LEAVES
+
+  0b00000101,   // 13: BASE LEAF + LEFT LEAF
+  0b01000001,   // 14: BASE LEAF + RIGHT LEAF
 };
 
 PlantStateNode plantStateGraphTree[] =
@@ -374,42 +393,54 @@ PlantStateNode plantStateGraphSeaweed[] =
   { 0, 0, 1,  0,   PlantExitFace_AcrossOffset,3 }, // BASE LEAF + CENTER LEAF
 };
 
-enum PlantType
+PlantStateNode plantStateGraphBush[] =
 {
-  PlantType_Tree,
-  PlantType_Vine,
-  PlantType_Seaweed,
-  
-  PlantType_None
+// BASE
+//  G1 G2 W   WFG  EXITS                      R
+  { 1, 0, 0,  0,   PlantExitFace_None,        0 }, // START
+  { 0, 0, 0,  0,   PlantExitFace_Fork,        8 }, // FORK LEAVES
+
+// BRANCHES
+//  G1 G2 W   WFG  EXITS                      R
+  { 1, 0, 0,  0,   PlantExitFace_None,        0 }, // START
+  { 1, 1, 0,  0,   PlantExitFace_None,        1 }, // BASE LEAF (CHOICE)
+
+// FORK BRANCH
+//  G1 G2 W   WFG  EXITS                      R
+  { 0, 0, 1,  0,   PlantExitFace_Fork,        7 }, // BASE LEAF + FORK LEAVES
+
+// CENTER BRANCH
+//  G1 G2 W   WFG  EXITS                      R
+  { 1, 0, 2,  1,   PlantExitFace_OneAcross,   4 }, // START - BASE BRANCH + CENTER LEAF (WAIT FOR GROWTH)
+  { 0, 0, 3,  0,   PlantExitFace_OneAcross,   5 }, // BASE BRANCH + CENTER BRANCH
+//  { 0, 0, 1,  0,   PlantExitFace_OneAcross,   6 }, // BASE BRANCH + CENTER BRANCH + TWO LEAVES
+
 };
 
-PlantStateNode *plantStateGraphs[] =
+struct PlantParams
 {
-  plantStateGraphTree,
-  plantStateGraphVine,
-  plantStateGraphSeaweed,
+  PlantStateNode *stateGraph;
+  byte branchStartIndex   : 3;
+  byte leafColorR         : 3;
+  byte leafColorG         : 3;
+  byte leafColorB         : 3;
+  byte maintainCost       : 1;  // 0=1, 1=2
+  byte growCost           : 1;  // 0=3, 1=?
+  byte retainEnergy       : 1;
 };
 
-int plantBranchStartIndexes[] =
-{
-  5,
-  2,
-  2,
-};
+#define RGB_LEAF           0>>5, 255>>5,  0>>5
+#define RGB_LEAF_VINE      0>>5, 192>>5, 32>>5
+#define RGB_LEAF_SEAWEED 128>>5, 160>>5,  0>>5
+#define RGB_LEAF_BUSH    192>>5,  32>>5,  0>>5
 
-byte plantLeafColor[][3] = 
+PlantParams plantParams[] =
 {
-  { RGB_LEAF },
-  { RGB_LEAF_VINE },
-  { RGB_LEAF_SEAWEED },
-};
-
-enum PlantFaceType
-{
-  PlantFaceType_None,
-  PlantFaceType_Leaf,
-  PlantFaceType_Branch,
-  PlantFaceType_Flower
+  // State graph              Br  Leaf color         M   G   R
+  {  plantStateGraphTree,     5,  RGB_LEAF,          0,  0,  1 },
+  {  plantStateGraphVine,     2,  RGB_LEAF_VINE,     0,  0,  1 },
+  {  plantStateGraphSeaweed,  2,  RGB_LEAF_SEAWEED,  0,  0,  1 },
+  {  plantStateGraphBush,     2,  RGB_LEAF_BUSH,     1,  0,  0 },
 };
 
 // Timer that controls how often a plant must pay its maintenance cost or else wither.
@@ -431,9 +462,6 @@ bool plantChildBranchGrew;    // flag that a child branch has grown somewhere in
 
 byte plantNumLeaves;
 byte plantNumBranches;
-
-#define PLANT_MAINTAIN_COST 1
-#define PLANT_GROW_COST 3
 
 // Sun
 #define MAX_GATHERED_SUN 200
@@ -948,7 +976,7 @@ void processCommForFace(Command command, byte value, byte f)
       if (plantType == PlantType_None)
       {
         plantType = value;
-        plantStateNodeIndex = plantBranchStartIndexes[plantType];
+        plantStateNodeIndex = plantParams[plantType].branchStartIndex;
       }
       break;
       
@@ -1214,7 +1242,7 @@ void loopPlantMaintain()
     return;
   }
 
-  PlantStateNode *plantStateNode = &plantStateGraphs[plantType][plantStateNodeIndex];
+  PlantStateNode *plantStateNode = &plantParams[plantType].stateGraph[plantStateNodeIndex];
 
   // For gravity-based plants, rotate towards the desired direction (up or down)
   char rootRelativeToGravity = plantRootFace - gravityUpFace;
@@ -1257,7 +1285,7 @@ void loopPlantMaintain()
   }
   
   // Use energy to maintain the current state
-  if (plantEnergy < PLANT_MAINTAIN_COST)
+  if (plantEnergy < (plantParams[plantType].maintainCost + 1))
   {
     // Not enough energy - plant is dying
     // Wither plant
@@ -1274,7 +1302,7 @@ void loopPlantMaintain()
   }
 
   // Have enough energy to maintain - deduct it
-  plantEnergy -= PLANT_MAINTAIN_COST;
+  plantEnergy -= plantParams[plantType].maintainCost + 1;
 }
 
 void loopPlantGrow()
@@ -1316,7 +1344,7 @@ void loopPlantGrow()
       }
       else
       {
-        // TODO : NEW PLANT TYPE
+        //plantType = PlantType_Bush;
       }
     }
     else
@@ -1345,7 +1373,7 @@ void loopPlantGrow()
   debugPlantEnergy = plantEnergy;
 #endif
 
-  PlantStateNode *plantStateNode = &plantStateGraphs[plantType][plantStateNodeIndex];
+  PlantStateNode *plantStateNode = &plantParams[plantType].stateGraph[plantStateNodeIndex];
 
   // Use energy to maintain the current state
   byte energyMaintain = 1;
@@ -1358,15 +1386,11 @@ void loopPlantGrow()
   byte energyForGrowth = plantEnergy - energyMaintain;
   plantEnergy -= energyForGrowth;
 
-  // Normally unused energy gets sent to child branches or is wasted
-  // If no growth occurred then save our energy for next time
-  bool retainEnergy = false;
-
   // Can we grow?
   if (plantStateNode->growState1 != 0)
   {
     // Is there enough energy to grow?
-    if (energyForGrowth >= PLANT_GROW_COST)
+    if (energyForGrowth >= (plantParams[plantType].growCost + 3))
     {
       // Some states wait for a child branch to grow
       if (!plantStateNode->waitForGrowth || plantChildBranchGrew)
@@ -1383,7 +1407,7 @@ void loopPlantGrow()
         }
   
         // Deduct energy and grow!
-        energyForGrowth -= PLANT_GROW_COST;
+        energyForGrowth -= plantParams[plantType].growCost + 3;
         plantStateNodeIndex += stateOffset;
 
         // Next state might need to wait for a child branch!
@@ -1396,7 +1420,10 @@ void loopPlantGrow()
     else
     {
       // Didn't grow so hold on to all our energy so maybe we can next time
-      plantEnergy += energyForGrowth;
+      if (plantParams[plantType].retainEnergy)
+      {
+        plantEnergy += energyForGrowth;
+      }
       return;
     }
   }
@@ -1674,7 +1701,7 @@ void render()
   // PLANTS
   if (plantType != PlantType_None)
   {
-    PlantStateNode *plantStateNode = &plantStateGraphs[plantType][plantStateNodeIndex];
+    PlantStateNode *plantStateNode = &plantParams[plantType].stateGraph[plantStateNodeIndex];
   
     int lutBits = plantRenderLUTIndexes[plantStateNode->faceRenderIndex];
     byte targetFace = plantRootFace;
@@ -1697,7 +1724,7 @@ void render()
       {
         switch (lutIndex)
         {
-          case PlantFaceType_Leaf:   plantNumLeaves++;   color = makeColorRGB(plantLeafColor[plantType][0], plantLeafColor[plantType][1], plantLeafColor[plantType][2]);   break;
+          case PlantFaceType_Leaf:   plantNumLeaves++;   color = makeColorRGB(plantParams[plantType].leafColorR<<5, plantParams[plantType].leafColorG<<5, plantParams[plantType].leafColorB<<5);   break;
           case PlantFaceType_Branch: plantNumBranches++; color = makeColorRGB(RGB_BRANCH); break;
           case PlantFaceType_Flower: plantNumLeaves++;   color = makeColorRGB(RGB_FLOWER); trySpawnBug(); break;
         }

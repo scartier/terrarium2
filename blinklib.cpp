@@ -102,12 +102,13 @@ uint8_t oddParity( uint8_t d ) {
     
     while (d) {
 
+#if 1
         bits += d & 0x1;
-        /*
+#else
         if (d & 0b00000001 ) {
             bits++;
         }
-        */
+#endif
         
         d >>=1;
         
@@ -292,14 +293,15 @@ static void setColorNow( Color newColor ) {
 }
 
 Color dim( Color color, byte brightness) {
+#if 1
   return color;
-  /*
+#else
     return MAKECOLOR_5BIT_RGB(
     (GET_5BIT_R(color)*brightness)/255,
     (GET_5BIT_G(color)*brightness)/255,
     (GET_5BIT_B(color)*brightness)/255
     );
-    */
+#endif
 }
 
 // When will we warm sleep due to inactivity
@@ -394,7 +396,6 @@ static void warm_sleep_cycle() {
     // This code picks a start near to SLEEP_ANIMATION_MAX_BRIGHTNESS that makes sure we end up at 0    
     fade_brightness = SLEEP_ANIMATION_MAX_BRIGHTNESS;
 
-#if 1
     for( uint8_t n=0; n<SLEEP_PACKET_REPEAT_COUNT; n++ ) {
 
         FOREACH_FACE(f) {
@@ -410,12 +411,6 @@ static void warm_sleep_cycle() {
         }
 
     }
-#else
-    FOREACH_FACE(f)
-    {
-      blinkbios_irdata_send_packet( f , force_sleep_packet , sizeof( force_sleep_packet ) );      // Note that we can use sizeof() here becuase the arrayt is explicity uint8_t which is always a byte on AVR
-    }
-#endif
         
     // Ensure that we end up completely off 
     setColorNow( OFF );
@@ -503,7 +498,6 @@ static void warm_sleep_cycle() {
 
     // For the wake animation we start off and dim to MAX by the end
 
-#if 1
     // This code picks a start near to SLEEP_ANIMATION_MAX_BRIGHTNESS that makes sure we end up at 0
     fade_brightness = 0;
     
@@ -520,12 +514,6 @@ static void warm_sleep_cycle() {
         }
 
     }
-#else
-    FOREACH_FACE(f)
-    {
-      blinkbios_irdata_send_packet( f ,  nop_wake_packet , sizeof( nop_wake_packet ) );      // Note that we can use sizeof() here becuase the arrayt is explicity uint8_t which is always a byte on AVR
-    }
-#endif
 
     // restore game pixels
     
