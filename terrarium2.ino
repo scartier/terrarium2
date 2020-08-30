@@ -1655,20 +1655,20 @@ void render()
   {
     if (faceStates[f].waterLevel > 0)
     {
-      setColorOnFace2(&color, f);
+      setColorOnFace(color, f);
     }
   }
 
   if (tileFlags & TileFlag_HasDirt)
   {
     color = makeColorRGB(RGB_DIRT);
-    setColorOnFace2(&color, 2);
-    setColorOnFace2(&color, 4);
+    setColorOnFace(color, 2);
+    setColorOnFace(color, 4);
     if (tileFlags & TileFlag_DirtIsFertile)
     {
       color = makeColorRGB(RGB_DIRT_FERTILE);
     }
-    setColorOnFace2(&color, 3);
+    setColorOnFace(color, 3);
   }
 
   // PLANTS
@@ -1701,7 +1701,7 @@ void render()
           case PlantFaceType_Branch: plantNumBranches++; color = makeColorRGB(RGB_BRANCH); break;
           case PlantFaceType_Flower: plantNumLeaves++;   color = makeColorRGB(RGB_FLOWER); trySpawnBug(); break;
         }
-        setColorOnFace2(&color, targetFace);
+        setColorOnFace(color, targetFace);
       }
       lutBits >>= 2;
       targetFace = CW_FROM_FACE(targetFace, 1);
@@ -1712,15 +1712,15 @@ void render()
   if (tileFlags & TileFlag_HasBug)
   {
     color = makeColorRGB(RGB_BUG);
-    setColorOnFace2(&color, CW_FROM_FACE(bugTargetCorner, bugFlapOpen ? 0 : 1));
-    setColorOnFace2(&color, CW_FROM_FACE(bugTargetCorner, bugFlapOpen ? 5 : 4));
+    setColorOnFace(color, CW_FROM_FACE(bugTargetCorner, bugFlapOpen ? 0 : 1));
+    setColorOnFace(color, CW_FROM_FACE(bugTargetCorner, bugFlapOpen ? 5 : 4));
   }
 
   if (tileFlags & TileFlag_HasDripper)
   {
     // Dripper is always on face 0
     color = makeColorRGB(RGB_DRIPPER);
-    setColorOnFace2(&color, 0);
+    setColorOnFace(color, 0);
   }
   
 #if DEBUG_COLORS
