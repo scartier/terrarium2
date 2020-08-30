@@ -40,12 +40,13 @@ byte worstFrameTime = 0;
 #endif
 
 #if USE_DATA_SPONGE
-byte sponge[60];
+byte sponge[49];
 // Aug 20: 45-49 bytes
 // Aug 21: 50, 17 
 // Aug 22: 10, 5
 // Aug 23: 24
 // Aug 26 flora: 55-59
+// Aug 29 before plant state reduction: 22, (after) 48
 #endif
 
 #define MAX(x,y) ((x) > (y) ? (x) : (y))
@@ -77,10 +78,12 @@ byte sponge[60];
 #define RGB_BUG        179,255,0
 
 #define HUE_WATER            171    // HSB=171,255,128  RGB=2,0,128
-#define RGB_WATER        2,0,128
+#define RGB_WATER        0,0,96
 
 #define HUE_LEAF              85    // HSB=85,255,255   RGB=0,255,0       HSB=85,255,192   RGB=0,191,0
 #define RGB_LEAF         0,255,0
+#define RGB_LEAF_VINE    0,192,32
+#define RGB_LEAF_SEAWEED 128,160,0
 
 #define HUE_BRANCH            28    // HSB=28,255,160   RGB=161,107,0     HSB=28,255,192   RGB=191,128,0
 #define RGB_BRANCH     191,128,0
@@ -200,6 +203,7 @@ enum TileFlags
   TileFlag_HasDripper    = 1<<0,
   TileFlag_HasDirt       = 1<<1,
   TileFlag_DirtIsFertile = 1<<2,
+  TileFlag_Submerged     = 1<<3,
   TileFlag_SpawnedBug    = 1<<4,
   TileFlag_HasBug        = 1<<5,
 };
@@ -257,15 +261,15 @@ enum PlantExitFace
   PlantExitFace_None,
   PlantExitFace_OneAcross,
   PlantExitFace_Fork,
+  PlantExitFace_AcrossOffset,
 };
 
 struct PlantStateNode
 {
   // Energy and state progression
-  byte energyGrow         : 2;  // plant energy required to progress to the next state
   byte growState1         : 4;  // state offset when growing (1)
   byte growState2         : 2;  // state offset when growing (2) [same, but also added to growState1]
-  byte witherState        : 4;  // state offset (backwards) when withering (0=dead)
+  byte witherState        : 3;  // state offset (backwards) when withering (0=dead)
   
   // Flags
   byte waitForGrowth      : 1;  // flag to only proceed once a child branch has grown
@@ -274,77 +278,130 @@ struct PlantStateNode
   PlantExitFace exitFace  : 2;  // none, one across, fork
 
   // Render info
-  byte faceLUTIndexes     : 8;
+  byte faceRenderIndex    : 4;
+};
+
+byte plantRenderLUTIndexes[] = 
+{//  4 3 2 0
+  0b00000000,   //  0: EMPTY
+  0b00000001,   //  1: BASE LEAF
+  0b00000010,   //  2: BASE BRANCH
+  0b00010001,   //  3: BASE LEAF + CENTER LEAF
+  0b00010010,   //  4: BASE BRANCH + CENTER LEAF
+  0b00100010,   //  5: BASE BRANCH + CENTER BRANCH
+  0b01100110,   //  6: BASE BRANCH + CENTER BRANCH + SIDE LEAVES
+  0b01000101,   //  7: BASE LEAF + FORK LEAVES
+  0b01000110,   //  8: BASE BRANCH + FORK LEAVES
+  0b10001010,   //  9: BASE BRANCH + FORK BRANCHES
+  0b10011010,   // 10: BASE BRANCH + FORK BRANCHES + CENTER LEAF
+  0b00110010,   // 11: BASE BRANCH + FLOWER
+  0b01110110,   // 12: BASE BRANCH + FLOWER + SIDE LEAVES
 };
 
 PlantStateNode plantStateGraphTree[] =
 {
 // BASE  
-//  E   G1 G2 W   WFG  EXITS                      R  4 3 2 0
-  { 1,  1, 0, 0,  0,   PlantExitFace_None,        0b00000000 }, // START
-  { 2,  1, 0, 0,  0,   PlantExitFace_None,        0b00000000 }, // GROWING
-  { 3,  1, 0, 1,  0,   PlantExitFace_OneAcross,   0b00010000 }, // LEAF
-  { 1,  1, 0, 1,  1,   PlantExitFace_OneAcross,   0b00010000 }, // LEAF (WAIT FOR GROWTH)
-  { 1,  1, 0, 1,  0,   PlantExitFace_OneAcross,   0b00100000 }, // BRANCH
-  { 0,  0, 0, 1,  0,   PlantExitFace_OneAcross,   0b00100000 }, // BRANCH
+//  G1 G2 W   WFG  EXITS                      R
+  { 1, 0, 0,  0,   PlantExitFace_None,        0 }, // START
+  { 1, 0, 0,  0,   PlantExitFace_OneAcross,   4 }, // LEAF
+  { 1, 0, 1,  1,   PlantExitFace_OneAcross,   4 }, // LEAF (WAIT FOR GROWTH)
+  { 1, 0, 0,  0,   PlantExitFace_OneAcross,   5 }, // BRANCH
+  { 0, 0, 1,  0,   PlantExitFace_OneAcross,   5 }, // BRANCH
 
 // BRANCHES
-//  E   G1 G2 W   WFG  EXITS                      R  4 3 2 0
-  { 3,  1, 0, 0,  0,   PlantExitFace_None,        0b00000000 }, // START
-  { 3,  2, 0, 0,  0,   PlantExitFace_None,        0b00000001 }, // BASE LEAF
-  { 3,  1, 0, 2,  0,   PlantExitFace_None,        0b00000010 }, // BASE BRANCH
-  { 3,  1, 1, 1,  0,   PlantExitFace_None,        0b00010010 }, // BASE BRANCH + CENTER LEAF (CHOICE)
-  { 3,  2, 0, 1,  0,   PlantExitFace_None,        0b00010110 }, // BASE BRANCH + CENTER LEAF + LEFT LEAF
-  { 3,  1, 0, 2,  0,   PlantExitFace_None,        0b01010010 }, // BASE BRANCH + CENTER LEAF + RIGHT LEAF
+//  G1 G2 W   WFG  EXITS                      R
+  { 1, 0, 0,  0,   PlantExitFace_None,        0 }, // START
+  { 2, 0, 0,  0,   PlantExitFace_None,        1 }, // BASE LEAF
+  { 1, 0, 0,  0,   PlantExitFace_None,        2 }, // BASE BRANCH (WITHER STATE)
 
 // FLOWER or BRANCH (1/8 chance of flower)
-//  E   G1 G2 W   WFG  EXITS                      R  4 3 2 0
-  { 3,  1, 4, 3,  0,   PlantExitFace_None,        0b01010110 }, // BASE BRANCH + THREE LEAVES (CHOICE)
-  { 0,  1, 3, 4,  0,   PlantExitFace_None,        0b01010110 }, // BASE BRANCH + THREE LEAVES (CHOICE)
-  { 0,  2, 1, 5,  0,   PlantExitFace_None,        0b01010110 }, // BASE BRANCH + THREE LEAVES (CHOICE)
-
-// FLOWER
-//  E  G1 G2  W   WFG  EXITS                      R  4 3 2 0
-  { 3,  3, 0, 5,  0,   PlantExitFace_None,        0b00110010 }, // BASE BRANCH + FLOWER
-  { 0,  0, 0, 1,  0,   PlantExitFace_None,        0b01110110 }, // BASE BRANCH + FLOWER + TWO LEAVES
+//  G1 G2 W   WFG  EXITS                      R
+  { 3, 1, 1,  0,   PlantExitFace_None,        4 }, // BASE BRANCH + CENTER LEAF (CHOICE)
+  { 2, 1, 2,  0,   PlantExitFace_None,        4 }, // BASE BRANCH + CENTER LEAF (CHOICE)
+  { 1, 1, 3,  0,   PlantExitFace_None,        4 }, // BASE BRANCH + CENTER LEAF (CHOICE)
 
 // CENTER BRANCH or FORK
-//  E  G1 G2  W   WFG  EXITS                      R  4 3 2 0
-  { 0,  3, 2, 6,  0,   PlantExitFace_None,        0b01010110 }, // BASE BRANCH + THREE LEAVES (CHOICE)
+//  G1 G2 W   WFG  EXITS                      R
+  { 4, 4, 3,  0,   PlantExitFace_None,        4 }, // BASE BRANCH + CENTER LEAF (CHOICE)
+
+// FLOWER
+//  G1 G2 W   WFG  EXITS                      R
+  { 1, 0, 5,  0,   PlantExitFace_None,        11 }, // BASE BRANCH + FLOWER
+  { 0, 0, 1,  0,   PlantExitFace_None,        12 }, // BASE BRANCH + FLOWER + TWO LEAVES
+
+// WITHER STATE
+//  G1 G2 W   WFG  EXITS                      R
+  { 1, 0, 0,  0,   PlantExitFace_None,        2 }, // BASE BRANCH (WITHER STATE)
 
 // FORK BRANCH
-//  E  G1 G2  W   WFG  EXITS                      R  4 3 2 0
-  { 3,  1, 0, 0,  0,   PlantExitFace_None,        0b00000010 }, // BASE BRANCH
-  { 3,  2, 0, 4,  0,   PlantExitFace_Fork,        0b10011010 }, // BASE BRANCH + TWO BRANCHES
-  { 0,  1, 0, 11, 1,   PlantExitFace_Fork,        0b01010110 }, // START - BASE BRANCH + THREE LEAVES (WAIT FOR GROWTH)
-  { 0,  0, 0, 2,  0,   PlantExitFace_Fork,        0b10011010 }, // BASE BRANCH + TWO BRANCHES + CENTER LEAF
+//  G1 G2 W   WFG  EXITS                      R
+  { 1, 0, 1,  1,   PlantExitFace_Fork,        8 }, // START - BASE BRANCH + TWO LEAVES (WAIT FOR GROWTH)
+  { 1, 0, 2,  0,   PlantExitFace_Fork,        9 }, // BASE BRANCH + TWO BRANCHES
+  { 0, 0, 1,  0,   PlantExitFace_Fork,        10 }, // BASE BRANCH + TWO BRANCHES + CENTER LEAF
 
 // CENTER BRANCH
-//  E  G1 G2  W   WFG  EXITS                      R  4 3 2 0
-  { 0,  5, 0, 13, 1,   PlantExitFace_OneAcross,   0b01010110 }, // START - BASE BRANCH + THREE LEAVES (WAIT FOR GROWTH)
-  { 3,  1, 0, 0,  0,   PlantExitFace_None,        0b00000010 }, // BASE BRANCH
-  { 3,  1, 1, 1,  0,   PlantExitFace_OneAcross,   0b00100110 }, // BASE BRANCH + CENTER BRANCH
-  { 3,  2, 0, 1,  0,   PlantExitFace_OneAcross,   0b00100110 }, // BASE BRANCH + CENTER BRANCH + LEFT LEAF
-  { 3,  1, 0, 2,  0,   PlantExitFace_OneAcross,   0b00100110 }, // BASE BRANCH + CENTER BRANCH + RIGHT LEAF
-  { 0,  0, 0, 3,  0,   PlantExitFace_OneAcross,   0b01100110 }, // BASE BRANCH + CENTER BRANCH + TWO LEAVES
+//  G1 G2 W   WFG  EXITS                      R
+  { 1, 0, 4,  1,   PlantExitFace_OneAcross,   4 }, // START - BASE BRANCH + CENTER LEAF (WAIT FOR GROWTH)
+  { 1, 0, 5,  0,   PlantExitFace_OneAcross,   5 }, // BASE BRANCH + CENTER BRANCH
+  { 0, 0, 1,  0,   PlantExitFace_OneAcross,   6 }, // BASE BRANCH + CENTER BRANCH + TWO LEAVES
+};
+
+PlantStateNode plantStateGraphVine[] =
+{
+// BASE  
+//  G1 G2 W   WFG  EXITS                      R
+  { 1, 0, 0,  0,   PlantExitFace_None,        0 }, // START
+  { 0, 0, 0,  0,   PlantExitFace_AcrossOffset,4 }, // LEAF
+
+// BRANCHES
+//  G1 G2 W   WFG  EXITS                      R
+  { 1, 0, 0,  0,   PlantExitFace_None,        0 }, // START
+  { 1, 0, 0,  0,   PlantExitFace_None,        1 }, // BASE LEAF
+  { 0, 0, 1,  0,   PlantExitFace_AcrossOffset,3 }, // BASE LEAF + CENTER LEAF
+};
+
+PlantStateNode plantStateGraphSeaweed[] =
+{
+// BASE
+//  G1 G2 W   WFG  EXITS                      R
+  { 1, 0, 0,  0,   PlantExitFace_None,        0 }, // START
+  { 0, 0, 0,  0,   PlantExitFace_AcrossOffset,4 }, // LEAF
+
+// BRANCHES
+//  G1 G2 W   WFG  EXITS                      R
+  { 1, 0, 0,  0,   PlantExitFace_None,        0 }, // START
+  { 1, 0, 0,  0,   PlantExitFace_None,        1 }, // BASE LEAF
+  { 0, 0, 1,  0,   PlantExitFace_AcrossOffset,3 }, // BASE LEAF + CENTER LEAF
+};
+
+enum PlantType
+{
+  PlantType_Tree,
+  PlantType_Vine,
+  PlantType_Seaweed,
+  
+  PlantType_None
 };
 
 PlantStateNode *plantStateGraphs[] =
 {
   plantStateGraphTree,
+  plantStateGraphVine,
+  plantStateGraphSeaweed,
 };
 
 int plantBranchStartIndexes[] =
 {
-  6,
+  5,
+  2,
+  2,
 };
 
-enum PlantType
+byte plantLeafColor[][3] = 
 {
-  PlantType_None = -1,
-  PlantType_Tree = 0,
-  PlantType_Vine,
-  PlantType_Seaweed
+  { RGB_LEAF },
+  { RGB_LEAF_VINE },
+  { RGB_LEAF_SEAWEED },
 };
 
 enum PlantFaceType
@@ -364,15 +421,19 @@ Timer plantMaintainTimer;
 char plantType = PlantType_None;
 byte plantStateNodeIndex;
 byte plantRootFace;
+byte plantExitFaceOffset;     // for plants that are gravity based
 byte plantEnergy;
 #if DEBUG_PLANT_ENERGY
 byte debugPlantEnergy;
 #endif
 
-bool plantChildBranchGrew;   // flag that a child branch has grown somewhere in the plant
+bool plantChildBranchGrew;    // flag that a child branch has grown somewhere in the plant
 
 byte plantNumLeaves;
 byte plantNumBranches;
+
+#define PLANT_MAINTAIN_COST 1
+#define PLANT_GROW_COST 3
 
 // Sun
 #define MAX_GATHERED_SUN 200
@@ -1019,6 +1080,18 @@ void loopWater()
       }
     }
   }
+
+  // Determine if the tile is fully submerged (water in every face)
+  tileFlags &= ~TileFlag_Submerged;
+  if ((faceStates[0].waterLevel > 0) &&
+      (faceStates[1].waterLevel > 0) &&
+      (faceStates[2].waterLevel > 0) &&
+      (faceStates[3].waterLevel > 0) &&
+      (faceStates[4].waterLevel > 0) &&
+      (faceStates[5].waterLevel > 0))
+  {
+    tileFlags |= TileFlag_Submerged;
+  }
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1086,6 +1159,17 @@ void loopDirt()
   {
     return;
   }
+
+  // Suck water from the side dirt tiles to the center
+  if (faceStates[3].waterStored < MAX_WATER_LEVEL)
+  {
+    byte waterTransferred = MIN(faceStates[2].waterStored, MAX_WATER_LEVEL - faceStates[3].waterStored);
+    faceStates[2].waterStored -= waterTransferred;
+    faceStates[3].waterStored += waterTransferred;
+    waterTransferred = MIN(faceStates[4].waterStored, MAX_WATER_LEVEL - faceStates[3].waterStored);
+    faceStates[4].waterStored -= waterTransferred;
+    faceStates[3].waterStored += waterTransferred;
+  }
   
   byte *reservoir = &faceStates[3].waterStored;
   if (*reservoir == 0)
@@ -1106,15 +1190,6 @@ void loopDirt()
   *reservoir -= minWaterOrSun;
   gatheredSun = 0;
   energyToDistribute += minWaterOrSun * PLANT_ENERGY_PER_SUN;
-
-  // Don't generate any energy if the plant is submerged
-  // Only need to check the three faces above ground
-  if (faceStates[0].flags & FaceFlag_WaterFull &&
-      faceStates[1].flags & FaceFlag_WaterFull &&
-      faceStates[5].flags & FaceFlag_WaterFull)
-  {
-    energyToDistribute = 0;
-  }
 
   plantEnergy += energyToDistribute;
   loopPlantGrow();
@@ -1141,9 +1216,48 @@ void loopPlantMaintain()
 
   PlantStateNode *plantStateNode = &plantStateGraphs[plantType][plantStateNodeIndex];
 
+  // For gravity-based plants, rotate towards the desired direction (up or down)
+  char rootRelativeToGravity = plantRootFace - gravityUpFace;
+  if (rootRelativeToGravity < 0)
+  {
+    rootRelativeToGravity += 6;
+  }
+  plantExitFaceOffset = 0;
+  if (plantType == PlantType_Vine)
+  {
+    switch (rootRelativeToGravity)
+    {
+      case 0:                          break;   // pointing directly down - all's good
+      case 1: 
+      case 2: plantExitFaceOffset = 5; break;   // rotate CCW by one face
+      case 3: plantEnergy = 0;         break;   // pointing directly up - cannnot grow
+      case 4:
+      case 5: plantExitFaceOffset = 1; break;   // rotate CW by one face
+    }
+  }
+  else if (plantType == PlantType_Seaweed)
+  {
+    switch (rootRelativeToGravity)
+    {
+      case 0: plantEnergy = 0;         break;   // pointing directly down - cannnot grow
+      case 1: 
+      case 2: plantExitFaceOffset = 1; break;   // rotate CCW by one face
+      case 3:                          break;   // pointing directly up - all's good
+      case 4:
+      case 5: plantExitFaceOffset = 5; break;   // rotate CW by one face
+    }
+  }
+
+  // Only seaweed can live under water
+  bool plantIsSubmerged = tileFlags & TileFlag_Submerged;
+  bool plantIsAquatic = plantType == PlantType_Seaweed;
+  if (plantIsSubmerged != plantIsAquatic)
+  {
+    plantEnergy = 0;
+  }
+  
   // Use energy to maintain the current state
-  byte energyMaintain = 1;//plantNumLeaves > 0 ? 2 : 1;
-  if (plantEnergy < energyMaintain)
+  if (plantEnergy < PLANT_MAINTAIN_COST)
   {
     // Not enough energy - plant is dying
     // Wither plant
@@ -1160,15 +1274,17 @@ void loopPlantMaintain()
   }
 
   // Have enough energy to maintain - deduct it
-  plantEnergy -= energyMaintain;
+  plantEnergy -= PLANT_MAINTAIN_COST;
 }
 
 void loopPlantGrow()
 {
   // Plants use energy to stay alive and grow
-  // Potential growth is triggered when this tile receives plant energy from the root
+  // This function is triggered when this tile receives plant energy from the root.
+  // For dirt tiles, this is from loopDirt().
+  // Otherwise it is when this tile receives a DistEnergy message from the root face.
 
-  // Try to grow a new plant if we don't have one already and the ground is fertile
+  // If we don't already have a plant, try to grow one
   if (plantType == PlantType_None)
   {
     if (plantEnergy == 0)
@@ -1184,8 +1300,36 @@ void loopPlantGrow()
     }
     
     // Try to start growing a new plant
-    // TODO : Different plant types!
-    plantType = PlantType_Tree;
+    // Determine plant type by
+    //   (1) tile orientation relative to gravity
+    //   (2) being underwater
+    if (gravityUpFace == 5 || gravityUpFace == 0 || gravityUpFace == 1)
+    {
+      // If submerged, grow seaweed
+      if (tileFlags & TileFlag_Submerged)
+      {
+        plantType = PlantType_Seaweed;
+      }
+      else if (gravityUpFace == 0)
+      {
+        plantType = PlantType_Tree;
+      }
+      else
+      {
+        // TODO : NEW PLANT TYPE
+      }
+    }
+    else
+    {
+      plantType = PlantType_Vine;
+    }
+
+    if (plantType == PlantType_None)
+    {
+      // Didn't find a plant type to grow - bail
+      return;
+    }
+
     plantStateNodeIndex = 0;
     plantRootFace = 3;
   }
@@ -1222,7 +1366,7 @@ void loopPlantGrow()
   if (plantStateNode->growState1 != 0)
   {
     // Is there enough energy to grow?
-    if (energyForGrowth >= plantStateNode->energyGrow)
+    if (energyForGrowth >= PLANT_GROW_COST)
     {
       // Some states wait for a child branch to grow
       if (!plantStateNode->waitForGrowth || plantChildBranchGrew)
@@ -1239,7 +1383,7 @@ void loopPlantGrow()
         }
   
         // Deduct energy and grow!
-        energyForGrowth -= plantStateNode->energyGrow;
+        energyForGrowth -= PLANT_GROW_COST;
         plantStateNodeIndex += stateOffset;
 
         // Next state might need to wait for a child branch!
@@ -1281,7 +1425,12 @@ void loopPlantGrow()
           // This means the right fork will always get more energy than the left
           energyToSend = MIN(15, energyForGrowth - energyToSend);
           
-          byte exitFace = CW_FROM_FACE(plantRootFace, 4);
+          exitFace = CW_FROM_FACE(plantRootFace, 4);
+          enqueueCommOnFace(exitFace, Command_DistEnergy, energyToSend);
+          break;
+
+        case PlantExitFace_AcrossOffset:
+          exitFace = CW_FROM_FACE(plantRootFace, 3 + plantExitFaceOffset);
           enqueueCommOnFace(exitFace, Command_DistEnergy, energyToSend);
           break;
       }
@@ -1510,12 +1659,24 @@ void render()
     }
   }
 
+  if (tileFlags & TileFlag_HasDirt)
+  {
+    color = makeColorRGB(RGB_DIRT);
+    setColorOnFace2(&color, 2);
+    setColorOnFace2(&color, 4);
+    if (tileFlags & TileFlag_DirtIsFertile)
+    {
+      color = makeColorRGB(RGB_DIRT_FERTILE);
+    }
+    setColorOnFace2(&color, 3);
+  }
+
   // PLANTS
   if (plantType != PlantType_None)
   {
     PlantStateNode *plantStateNode = &plantStateGraphs[plantType][plantStateNodeIndex];
   
-    int lutBits = plantStateNode->faceLUTIndexes;
+    int lutBits = plantRenderLUTIndexes[plantStateNode->faceRenderIndex];
     byte targetFace = plantRootFace;
 
     plantNumLeaves = 0;
@@ -1524,22 +1685,26 @@ void render()
     for(uint8_t f = 0; f <= 4 ; ++f) // one short because face 5 isn't used
     {
       // Face 1 is also not used
-      if (f != 1)
+      if (f == 1)
       {
-        byte lutIndex = lutBits & 0x3;
-        if (lutIndex != PlantFaceType_None)
-        {
-          switch (lutIndex)
-          {
-            case PlantFaceType_Leaf:   plantNumLeaves++;   color = makeColorRGB(RGB_LEAF);   break;
-            case PlantFaceType_Branch: plantNumBranches++; color = makeColorRGB(RGB_BRANCH); break;
-            case PlantFaceType_Flower: plantNumLeaves++;   color = makeColorRGB(RGB_FLOWER); trySpawnBug(); break;
-          }
-          setColorOnFace2(&color, targetFace);
-        }
-        lutBits >>= 2;
+        // Take this opportunity to adjust the target face based on potential gravity influence
+        targetFace = CW_FROM_FACE(targetFace, plantExitFaceOffset + 1);
+        continue;
       }
-      targetFace += (targetFace == 5) ? -5 : 1;
+      
+      byte lutIndex = lutBits & 0x3;
+      if (lutIndex != PlantFaceType_None)
+      {
+        switch (lutIndex)
+        {
+          case PlantFaceType_Leaf:   plantNumLeaves++;   color = makeColorRGB(plantLeafColor[plantType][0], plantLeafColor[plantType][1], plantLeafColor[plantType][2]);   break;
+          case PlantFaceType_Branch: plantNumBranches++; color = makeColorRGB(RGB_BRANCH); break;
+          case PlantFaceType_Flower: plantNumLeaves++;   color = makeColorRGB(RGB_FLOWER); trySpawnBug(); break;
+        }
+        setColorOnFace2(&color, targetFace);
+      }
+      lutBits >>= 2;
+      targetFace = CW_FROM_FACE(targetFace, 1);
     }
   }
 
@@ -1558,18 +1723,6 @@ void render()
     setColorOnFace2(&color, 0);
   }
   
-  if (tileFlags & TileFlag_HasDirt)
-  {
-    color = makeColorRGB(RGB_DIRT);
-    setColorOnFace2(&color, 2);
-    setColorOnFace2(&color, 4);
-    if (tileFlags & TileFlag_DirtIsFertile)
-    {
-      color = makeColorRGB(RGB_DIRT_FERTILE);
-    }
-    setColorOnFace2(&color, 3);
-  }
-
 #if DEBUG_COLORS
   // Debug to show gravity
   setColorOnFace(WHITE, gravityUpFace);
@@ -1598,20 +1751,12 @@ void render()
   }
 #endif
 
-#if DETECT_COMM_ERRORS
-  // Error codes
+  // Debug output overrides eveeeerything
   FOREACH_FACE(f)
   {
     if (faceStates[f].flags & FaceFlag_Debug)
     {
       setColorOnFace(makeColorRGB(255,128,64), f);
     }
-
-    if (ErrorOnFace(f))
-    {
-      setColorOnFace(makeColorRGB(255,0,0), f);
-    }
   }
-#endif
-
 }
