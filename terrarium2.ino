@@ -846,7 +846,6 @@ void resetOurState()
   {
     FaceState *faceState = &faceStates[f];
 
-    faceState->flags &= ~FaceFlag_WaterFull;
     faceState->waterLevel = 0;
     faceState->waterAdded = 0;
     faceState->waterStored = 0;
