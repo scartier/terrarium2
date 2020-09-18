@@ -1,7 +1,12 @@
 // TERRARIUM
 // (c) 2020 Scott Cartier
 
+// TODO
+// * Make bug/fish/crawly die as necessary
+// * Proper random function
+
 #define null 0
+#define DC 0      // don't care value
 
 // Defines to enable debug code
 #define DEBUG_COMMS         0
@@ -11,9 +16,17 @@
 //#define NO_STACK_WATCHER
 #define DEBUG_PLANT_ENERGY  0
 #define DEBUG_SPAWN_BUG     0
+#define DEBUG_SPAWN_FISH    0
+#define DEBUG_SPAWN_CRAWLY  0
+#define DIM_COLORS          0
 
-#define INCLUDE_FLORA       1
-#define INCLUDE_FAUNA       0
+#define OPTIMIZE
+#define OLD_COMM_QUEUE    // testing new comm method
+//#define NEW_RENDER
+
+// Stuff to disable to get more code space
+#define DISABLE_CHILD_BRANCH_GREW     // disabling save 60 bytes
+#define ENABLE_DIRT_RESERVOIR         // enabling saves 52 bytes
 
 #ifndef BGA_CUSTOM_BLINKLIB
 #error "This code requires BGA's Custom Blinklib"
@@ -27,7 +40,7 @@ byte worstFrameTime = 0;
 
 #if USE_DATA_SPONGE
 #warning DATA SPONGE ENABLED
-byte sponge[25];
+byte sponge[81];
 // Aug 26 flora: 55-59
 // Aug 29 before plant state reduction: 22, (after) 48
 // Aug 30 after making plant parameter table: 21, 23
@@ -35,12 +48,18 @@ byte sponge[25];
 // Sep 7: Testing Bruno's blinklib: 2 (before), 14 (after)
 // Sep 8: Remove empty start states for each plant branch stage: 37
 // Sep 8: Switch to data centric CW/CCW/OPPOSITE macros: 25
+// Sep 10: 19(??)
+// Sep 10: Latest BGA blinklib: 238?
+// Sep 13: Code optimizations (at expense of data): 132
+// Sep 15: Code optimizations (at expense of data): 46
+// Sep 16: Went back to packing water table data: 81
 #endif
 
 #define MAX(x,y) ((x) > (y) ? (x) : (y))
 #define MIN(x,y) ((x) < (y) ? (x) : (y))
 
 byte faceOffsetArray[] = { 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5 };
+unsigned long faceOffsetArrayLong[] = { 0x10543210, 0x21054321, 0x32105432, 0x43210543, 0x54321054, 0x05432105 };
 
 #define CCW_FROM_FACE CCW_FROM_FACE2
 #define CCW_FROM_FACE1(f, amt) (((f) - (amt)) + (((f) >= (amt)) ? 0 : 6))
@@ -49,13 +68,17 @@ byte faceOffsetArray[] = { 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5 };
 #define CW_FROM_FACE CW_FROM_FACE2
 #define CW_FROM_FACE1(f, amt) (((f) + (amt)) % FACE_COUNT)
 #define CW_FROM_FACE2(f, amt) faceOffsetArray[(f) + (amt)]
+#define CW_FROM_FACE3(f, amt) ((faceOffsetArrayLong[f] >> (amt << 2)) & 0xF)
 
 #define OPPOSITE_FACE OPPOSITE_FACE2
 #define OPPOSITE_FACE1(f) (((f) < 3) ? ((f) + 3) : ((f) - 3))
 #define OPPOSITE_FACE2(f) CW_FROM_FACE((f), 3)
 
-#define SET_COLOR_ON_FACE(c,f) setColorOnFace2(&c, f)
-//#define SET_COLOR_ON_FACE(c,f) setColorOnFace(c, f)
+#define SET_COLOR_ON_FACE(c,f) setColorOnFace(c, f)
+//#define SET_COLOR_ON_FACE(c,f) setColorOnFace2(&c, f)
+//#define SET_COLOR_ON_FACE(c,f) blinkbios_pixel_block.pixelBuffer[f].as_uint16 = c.as_uint16
+//#define SET_COLOR_ON_FACE(c,f) faceColors[f] = c
+//#define SET_COLOR_ON_FACE(c,f) setColorOnFace3(c.as_uint16, f)
 
 // =================================================================================================
 //
@@ -63,32 +86,81 @@ byte faceOffsetArray[] = { 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5 };
 //
 // =================================================================================================
 
-#define HUE_DRIPPER          106    // HSB=106,255,255  RGB=0,255,128
-#define RGB_DRIPPER    0,255,128
+#define RGB_DRIPPER       0>>DIM_COLORS,255>>DIM_COLORS,128>>DIM_COLORS
+#define RGB_DRIPPER_R     0
+#define RGB_DRIPPER_G     255
+#define RGB_DRIPPER_B     128
 
-#define HUE_DIRT              32    // HSB=32,255,255   RGB=255,191,0     HSB=32,255,128   RGB=128,96,0
-#define RGB_DIRT        128,96,0
-#define RGB_DIRT_FERTILE 96,128,0
+#define RGB_DIRT          128>>DIM_COLORS,96>>DIM_COLORS,0
+#define RGB_DIRT_R        128
+#define RGB_DIRT_G        96
+#define RGB_DIRT_B        0
 
-#define HUE_BUG               55    // HSB=55,255,255   RGB=179,255,0     HSB=55,255,192   RGB=134,191,0
-#define RGB_BUG        179,255,0
+#define RGB_DIRT_FERTILE  96>>DIM_COLORS,128>>DIM_COLORS,0
+#define RGB_FERTILE_R     96
+#define RGB_FERTILE_G     128
+#define RGB_FERTILE_B     0
 
-#define HUE_WATER            171    // HSB=171,255,128  RGB=2,0,128
-#define RGB_WATER        0,0,96
+#define RGB_BUG           179>>DIM_COLORS,255>>DIM_COLORS,0
+#define RGB_BUG_R         179
+#define RGB_BUG_G         255
+#define RGB_BUG_B         0
 
-#define HUE_LEAF              85    // HSB=85,255,255   RGB=0,255,0       HSB=85,255,192   RGB=0,191,0
+#define RGB_WATER         0,0,96>>DIM_COLORS
+#define RGB_WATER_R       0
+#define RGB_WATER_G       0
+#define RGB_WATER_B       96
 
-#define HUE_BRANCH            28    // HSB=28,255,160   RGB=161,107,0     HSB=28,255,192   RGB=191,128,0
-#define RGB_BRANCH     191,128,0
+#define RGB_BRANCH        191>>DIM_COLORS,128>>DIM_COLORS,0
+#define RGB_BRANCH_R      191
+#define RGB_BRANCH_G      128
+#define RGB_BRANCH_B      0
 
-#define HUE_FLOWER           233    // HSB=233,255,255  RGB=255,0,132     HSB=233,255,192  RGB=191,0,99
-#define RGB_FLOWER   255,192,192
+#define RGB_FLOWER        255>>DIM_COLORS,192>>DIM_COLORS,192>>DIM_COLORS
+#define RGB_FLOWER_R      255
+#define RGB_FLOWER_G      192
+#define RGB_FLOWER_B      192
 
-#if DEBUG_COLORS
-#define COLOR_PLANT_GROWTH1 makeColorRGB( 128,  0,  64)
-#define COLOR_PLANT_GROWTH2 makeColorRGB(  64,  0, 128)
-#define COLOR_PLANT_GROWTH3 makeColorRGB(  64, 64,  64)
-#endif
+#define RGB_FLOWER_USED   255>>DIM_COLORS,128>>DIM_COLORS,128>>DIM_COLORS
+#define RGB_FLOWER_USED_R 255
+#define RGB_FLOWER_USED_G 128
+#define RGB_FLOWER_USED_B 128
+
+#define RGB_FISH1   242>>5>>DIM_COLORS, 113>>5>>DIM_COLORS, 102>>6>>DIM_COLORS
+#define RGB_FISH2   255>>5>>DIM_COLORS, 133>>5>>DIM_COLORS,  33>>6>>DIM_COLORS
+#define RGB_FISH3   250>>5>>DIM_COLORS, 252>>5>>DIM_COLORS, 104>>6>>DIM_COLORS
+#define RGB_FISH4   181>>5>>DIM_COLORS, 255>>5>>DIM_COLORS,  33>>6>>DIM_COLORS
+#define RGB_FISH5    33>>5>>DIM_COLORS, 255>>5>>DIM_COLORS, 207>>6>>DIM_COLORS
+#define RGB_FISH6   200>>5>>DIM_COLORS, 104>>5>>DIM_COLORS, 252>>6>>DIM_COLORS
+#define RGB_FISH7    64>>5>>DIM_COLORS,  64>>5>>DIM_COLORS,  64>>6>>DIM_COLORS
+#define RGB_FISH8   200>>5>>DIM_COLORS, 200>>5>>DIM_COLORS, 200>>6>>DIM_COLORS
+
+#define RGB_CRAWLY 64>>DIM_COLORS,255>>DIM_COLORS,64>>DIM_COLORS
+#define RGB_CRAWLY_R      64
+#define RGB_CRAWLY_G      255
+#define RGB_CRAWLY_B      64
+
+#define RGB_TO_U16_WITH_DIM(r,g,b) (((r>>3>>DIM_COLORS) & 0x1F)<<1 | ((g>>3>>DIM_COLORS) & 0x1F)<<6 | ((b>>3>>DIM_COLORS) & 0x1F)<<11)
+#define U16_DRIPPER       RGB_TO_U16_WITH_DIM(RGB_DRIPPER_R,      RGB_DRIPPER_G,      RGB_DRIPPER_B     )
+#define U16_CRAWLY        RGB_TO_U16_WITH_DIM(RGB_CRAWLY_R,       RGB_CRAWLY_G,       RGB_CRAWLY_B      )
+#define U16_BUG           RGB_TO_U16_WITH_DIM(RGB_BUG_R,          RGB_BUG_G,          RGB_BUG_B         )
+#define U16_WATER         RGB_TO_U16_WITH_DIM(RGB_WATER_R,        RGB_WATER_G,        RGB_WATER_B       )
+#define U16_DIRT          RGB_TO_U16_WITH_DIM(RGB_DIRT_R,         RGB_DIRT_G,         RGB_DIRT_B        )
+#define U16_FERTILE       RGB_TO_U16_WITH_DIM(RGB_FERTILE_R,      RGB_FERTILE_G,      RGB_FERTILE_B     )
+#define U16_BRANCH        RGB_TO_U16_WITH_DIM(RGB_BRANCH_R,       RGB_BRANCH_G,       RGB_BRANCH_B      )
+#define U16_LEAF          0x89AB
+#define U16_FLOWER        RGB_TO_U16_WITH_DIM(RGB_FLOWER_R,       RGB_FLOWER_G,       RGB_FLOWER_B      )
+#define U16_FLOWER_USED   RGB_TO_U16_WITH_DIM(RGB_FLOWER_USED_R,  RGB_FLOWER_USED_G,  RGB_FLOWER_USED_B )
+#define U16_FISH          0xABCD
+
+#define U16_DEBUG         RGB_TO_U16_WITH_DIM(255, 128, 64)
+
+struct ColorByte
+{
+  byte r : 3;
+  byte g : 3;
+  byte b : 2;
+};
 
 // =================================================================================================
 //
@@ -100,7 +172,7 @@ byte faceOffsetArray[] = { 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5 };
 #define TOGGLE_DATA 0
 struct FaceValue
 {
-  byte value  : 4;
+  byte value  : 6;
   byte toggle : 1;
   byte ack    : 1;
 };
@@ -109,19 +181,20 @@ enum Command
 {
   Command_None,
   Command_SetWaterFull,     // Tells neighbor we are full of water
-  Command_WaterAdd,         // Adds water to this face
+  Command_AddWater,         // Adds water to this face
   Command_GravityDir,       // Propagates the gravity direction
   Command_DistEnergy,       // Distribute plant energy
   Command_TransferBug,      // Attempt to transfer a bug from one tile to another (must be confirmed)
-  Command_TransferBugCW,    // Same as above, but transfer to the face CW from the receiver
-  Command_BugAccepted,      // Confirmation of the transfer - sender must tolerate this never arriving, or arriving late
+  Command_Accepted,         // Confirmation of the transfer - sender must tolerate this never arriving, or arriving late
+#ifndef DISABLE_CHILD_BRANCH_GREW
   Command_ChildBranchGrew,  // Sent down a plant to tell it that something grew
+#endif
   Command_GatherSun,        // Plant leaves gather sun and send it down to the root
   Command_QueryPlantType,   // Ask the root what plant should grow
   Command_PlantType,        // Sending the plant type
-#if INCLUDE_FLORA
-  Command_BranchStage,      // More sophisticated plant growth control
-#endif
+  Command_TransferFish,     // Attempt to transfer a fish from one tile to another (must be confirmed)
+  Command_TransferCrawly,   // Attempt to transfer a crawly from one tile to another (must be confirmed)
+  Command_FishTail,         // Turn on the fish tail because the tile above us has a fish at the bottom
 
 #if DEBUG_COMMS
   Command_UpdateState,
@@ -132,13 +205,22 @@ enum Command
 
 struct CommandAndData
 {
-  Command command : 4;
-  byte data : 4;
+#ifndef OLD_COMM_QUEUE
+  byte face;
+#endif
+  Command command : 8;
+  byte data : 8;
 };
 
+#ifdef OLD_COMM_QUEUE
 #define COMM_QUEUE_SIZE 4
 CommandAndData commQueues[FACE_COUNT][COMM_QUEUE_SIZE];
 byte commInsertionIndexes[FACE_COUNT];
+#else
+#define COMM_QUEUE_SIZE 12
+CommandAndData commQueue[COMM_QUEUE_SIZE];
+byte commInsertionIndex;
+#endif
 
 #if DETECT_COMM_ERRORS
 #define COMM_INDEX_ERROR_OVERRUN 0xFF
@@ -168,7 +250,9 @@ struct FaceState
   // Application-specific fields
   byte waterLevel;
   byte waterAdded;
+#ifndef ENABLE_DIRT_RESERVOIR
   byte waterStored;   // dirt tiles hold on to water
+#endif
   // ---------------------------
 
 #if DEBUG_COMMS
@@ -177,6 +261,8 @@ struct FaceState
 #endif
 };
 FaceState faceStates[FACE_COUNT];
+
+byte numNeighbors;
 
 #if DEBUG_COMMS
 // Timer used to toggle between green & blue
@@ -195,14 +281,16 @@ Timer gravityTimer;
 
 enum TileFlags
 {
-  TileFlag_HasDripper    = 1<<0,
-  TileFlag_HasDirt       = 1<<1,
-  TileFlag_DirtIsFertile = 1<<2,
-  TileFlag_Submerged     = 1<<3,
-  TileFlag_SpawnedBug    = 1<<4,
-  TileFlag_HasBug        = 1<<5,
+  TileFlag_HasDripper     = 1<<0,
+  TileFlag_HasDirt        = 1<<1,
+  TileFlag_DirtIsFertile  = 1<<2,
+  TileFlag_Submerged      = 1<<3,
+  TileFlag_SpawnedCritter = 1<<4,
+  TileFlag_HasBug         = 1<<5,
+  TileFlag_HasFish        = 1<<6,
+  TileFlag_HasCrawly      = 1<<7,
 
-  TileFlag_ShowPlantEnergy = 1<<7,
+  //TileFlag_ShowPlantEnergy = 1<<7,
 };
 byte tileFlags = 0;
 
@@ -234,7 +322,10 @@ Timer evaporationTimer;
 #define SEND_GRAVITY_RATE 3000
 #define CHECK_GRAVITY_RATE (SEND_GRAVITY_RATE-1000)
 Timer sendGravityTimer;
-byte gravityUpFace = 0;
+
+#define DEFAULT_GRAVITY_UP_FACE 0
+byte gravityUpFace = DEFAULT_GRAVITY_UP_FACE;
+byte *gravityRelativeFace = &faceOffsetArray[DEFAULT_GRAVITY_UP_FACE];
 
 // -------------------------------------------------------------------------------------------------
 // DIRT
@@ -250,18 +341,19 @@ Timer plantEnergyTimer;
 #define PLANT_ENERGY_FROM_WATER 3
 #define PLANT_ENERGY_PER_SUN    1
 
+#ifdef ENABLE_DIRT_RESERVOIR
+byte reservoir;
+#endif
+
 // -------------------------------------------------------------------------------------------------
 // PLANT
 //
 enum PlantType
 {
   PlantType_Tree,
-
-#if INCLUDE_FLORA
   PlantType_Vine,
   PlantType_Seaweed,
-  PlantType_Slope,
-#endif
+  PlantType_Dangle,
 
   PlantType_MAX,
   
@@ -324,153 +416,129 @@ byte plantRenderLUTIndexes[] =
   
   0b00110001,   // 15: BASE LEAF + CENTER FLOWER
   0b01110101,   // 16: BASE LEAF + CENTER FLOWER + SIDE LEAVES
+
+  0b01010001,   // 17: BASE LEAF + CENTER LEAF + LEFT LEAF (for debug mostly)
+  0b00010101,   // 18: BASE LEAF + CENTER LEAF + RIGHT LEAF (for debug mostly)
+
+  0b11010001,   // 19: BASE LEAF + CENTER LEAF + LEFT FLOWER
+  0b00011101,   // 20: BASE LEAF + CENTER LEAF + RIGHT FLOWER
 };
 
 PlantStateNode plantStateGraphTree[] =
 {
-#if INCLUDE_FLORA
 // BASE  
 //  G1 G2 W   WFG  AS,  UN,  EXITS                       R
-  { 1, 0, 1,  1,   1,   0,   PlantExitFace_OneAcross,    13 }, // CENTER LEAF (WAIT FOR GROWTH)
-  { 0, 0, 0,  0,   1,   0,   PlantExitFace_OneAcross,    14 }, // CENTER BRANCH
+  { 1, 0, 1,  1,   1,   DC,  PlantExitFace_OneAcross,    13 }, // CENTER LEAF (WAIT FOR GROWTH)
+  { 0, 0, 0,  0,   1,   DC,  PlantExitFace_OneAcross,    14 }, // CENTER BRANCH
 
 // STAGE 1 (TRUNK)
 //  G1 G2 W   WFG  AS,  UN,  EXITS                       R
-  { 1, 1, 1,  0,   0,   0,   PlantExitFace_None,         1 }, // BASE LEAF (WITHER STATE) (CHOICE)
-  { 2, 0, 0,  1,   0,   0,   PlantExitFace_OneAcross,    4 }, // BASE BRANCH + CENTER LEAF (WAIT FOR GROWTH)
-  { 1, 0, 0,  1,   1,   0,   PlantExitFace_OneAcross,    4 }, // BASE BRANCH + CENTER LEAF (WAIT FOR GROWTH) (ADVANCE STAGE)
-  { 1, 0, 1,  0,   0,   0,   PlantExitFace_OneAcross,    5 }, // BASE BRANCH + CENTER BRANCH
-  { 0, 0, 0,  0,   0,   0,   PlantExitFace_OneAcross,    6 }, // BASE BRANCH + CENTER BRANCH + SIDE LEAVES
+  { 1, 1, 1,  0,   0,   DC,  PlantExitFace_None,         1 }, // BASE LEAF (WITHER STATE) (CHOICE)
+  { 2, 0, 0,  1,   0,   DC,  PlantExitFace_OneAcross,    4 }, // BASE BRANCH + CENTER LEAF (WAIT FOR GROWTH)
+  { 1, 0, 0,  1,   1,   DC,  PlantExitFace_OneAcross,    4 }, // BASE BRANCH + CENTER LEAF (WAIT FOR GROWTH) (ADVANCE STAGE)
+  { 1, 0, 1,  0,   0,   DC,  PlantExitFace_OneAcross,    5 }, // BASE BRANCH + CENTER BRANCH
+  { 0, 0, 0,  0,   0,   DC,  PlantExitFace_OneAcross,    6 }, // BASE BRANCH + CENTER BRANCH + SIDE LEAVES
 
 // STAGE 2 (BRANCHES)
 //  G1 G2 W   WFG  AS,  UN,  EXITS                       R
-  { 1, 1, 1,  0,   0,   0,   PlantExitFace_None,         1 }, // BASE LEAF (WITHER STATE) (CHOICE)
-  { 2, 0, 0,  1,   0,   0,   PlantExitFace_Fork,         8 }, // BASE BRANCH + TWO LEAVES (WAIT FOR GROWTH)
-  { 1, 0, 0,  1,   1,   0,   PlantExitFace_Fork,         8 }, // BASE BRANCH + TWO LEAVES (WAIT FOR GROWTH) (ADVANCE STAGE)
-  { 1, 0, 1,  0,   0,   0,   PlantExitFace_Fork,         9 }, // BASE BRANCH + TWO BRANCHES
-  { 0, 0, 0,  0,   0,   0,   PlantExitFace_Fork,         10 }, // BASE BRANCH + TWO BRANCHES + CENTER LEAF
+  { 1, 1, 1,  0,   0,   DC,  PlantExitFace_None,         1 }, // BASE LEAF (WITHER STATE) (CHOICE)
+  { 2, 0, 0,  1,   0,   DC,  PlantExitFace_Fork,         8 }, // BASE BRANCH + TWO LEAVES (WAIT FOR GROWTH)
+  { 1, 0, 0,  1,   1,   DC,  PlantExitFace_Fork,         8 }, // BASE BRANCH + TWO LEAVES (WAIT FOR GROWTH) (ADVANCE STAGE)
+  { 1, 0, 1,  0,   0,   DC,  PlantExitFace_Fork,         9 }, // BASE BRANCH + TWO BRANCHES
+  { 0, 0, 0,  0,   0,   DC,  PlantExitFace_Fork,         10 }, // BASE BRANCH + TWO BRANCHES + CENTER LEAF
 
 // STAGE 3 (FLOWERS)
 //  G1 G2 W   WFG  AS,  UN,  EXITS                       R
-  { 1, 0, 1,  0,   0,   0,   PlantExitFace_None,         1 }, // BASE LEAF (WITHER STATE)
-  { 1, 0, 1,  0,   0,   0,   PlantExitFace_None,         11 }, // BASE BRANCH + FLOWER (WITHER STATE)
-  { 0, 0, 0,  0,   0,   0,   PlantExitFace_None,         12 }, // BASE BRANCH + FLOWER + TWO LEAVES
-#else
-// BASE  
--//  G1 G2 W   WFG  EXITS                      R
--  { 1, 0, 0,  0,   0,   PlantExitFace_None,        0 }, // START
--  { 1, 0, 0,  0,   0,   PlantExitFace_OneAcross,   4 }, // LEAF
--  { 1, 0, 1,  1,   0,   PlantExitFace_OneAcross,   4 }, // LEAF (WAIT FOR GROWTH)
--  { 1, 0, 0,  0,   0,   PlantExitFace_OneAcross,   5 }, // BRANCH
--  { 0, 0, 1,  0,   0,   PlantExitFace_OneAcross,   5 }, // BRANCH
--
--// BRANCHES
--//  G1 G2 W   WFG  EXITS                      R
--  { 1, 0, 0,  0,   0,   PlantExitFace_None,        0 }, // START
--  { 2, 0, 0,  0,   0,   PlantExitFace_None,        1 }, // BASE LEAF
--  { 1, 0, 0,  0,   0,   PlantExitFace_None,        2 }, // BASE BRANCH (WITHER STATE)
--
--// FLOWER or BRANCH (1/8 chance of flower)
--//  G1 G2 W   WFG  EXITS                      R
--  { 3, 1, 1,  0,   0,   PlantExitFace_None,        4 }, // BASE BRANCH + CENTER LEAF (CHOICE)
--  { 2, 1, 2,  0,   0,   PlantExitFace_None,        4 }, // BASE BRANCH + CENTER LEAF (CHOICE)
--  { 1, 1, 3,  0,   0,   PlantExitFace_None,        4 }, // BASE BRANCH + CENTER LEAF (CHOICE)
--
--// CENTER BRANCH or FORK
--//  G1 G2 W   WFG  EXITS                      R
--  { 4, 4, 3,  0,   0,   PlantExitFace_None,        4 }, // BASE BRANCH + CENTER LEAF (CHOICE)
--
--// FLOWER
--//  G1 G2 W   WFG  EXITS                      R
--  { 1, 0, 5,  0,   0,   PlantExitFace_None,        11 }, // BASE BRANCH + FLOWER
--  { 0, 0, 1,  0,   0,   PlantExitFace_None,        12 }, // BASE BRANCH + FLOWER + TWO LEAVES
--
--// WITHER STATE
--//  G1 G2 W   WFG  EXITS                      R
--  { 1, 0, 0,  0,   0,   PlantExitFace_None,        2 }, // BASE BRANCH (WITHER STATE)
--
--// FORK BRANCH
--//  G1 G2 W   WFG  EXITS                      R
--  { 1, 0, 1,  1,   0,   PlantExitFace_Fork,        8 }, // START - BASE BRANCH + TWO LEAVES (WAIT FOR GROWTH)
--  { 1, 0, 2,  0,   0,   PlantExitFace_Fork,        9 }, // BASE BRANCH + TWO BRANCHES
--  { 0, 0, 1,  0,   0,   PlantExitFace_Fork,        10 }, // BASE BRANCH + TWO BRANCHES + CENTER LEAF
--
--// CENTER BRANCH
--//  G1 G2 W   WFG  EXITS                      R
--  { 1, 0, 4,  1,   0,   PlantExitFace_OneAcross,   4 }, // START - BASE BRANCH + CENTER LEAF (WAIT FOR GROWTH)
--  { 1, 0, 5,  0,   0,   PlantExitFace_OneAcross,   5 }, // BASE BRANCH + CENTER BRANCH
--  { 0, 0, 1,  0,   0,   PlantExitFace_OneAcross,   6 }, // BASE BRANCH + CENTER BRANCH + TWO LEAVES
-#endif
+  { 1, 0, 1,  0,   0,   DC,  PlantExitFace_None,         1 }, // BASE LEAF (WITHER STATE)
+  { 1, 0, 1,  0,   0,   DC,  PlantExitFace_None,         11 }, // BASE BRANCH + FLOWER (WITHER STATE)
+  { 0, 0, 0,  0,   0,   DC,  PlantExitFace_None,         12 }, // BASE BRANCH + FLOWER + TWO LEAVES
 };
 
-#if INCLUDE_FLORA
 PlantStateNode plantStateGraphVine[] =
 {
 // BASE  
 //  G1 G2 W   WFG  AS,  UN,  EXITS                       R
-  { 0, 0, 0,  0,   1,   0,   PlantExitFace_AcrossOffset, 13 }, // LEAF
+  { 0, 0, 0,  0,   1,   DC,  PlantExitFace_AcrossOffset, 13 }, // LEAF
 
-// BRANCHES
+// STAGE 1 (NORMAL)
 //  G1 G2 W   WFG  AS,  UN,  EXITS                       R
-  { 1, 0, 1,  0,   0,   0,   PlantExitFace_None,         1 }, // BASE LEAF
-  { 0, 0, 0,  0,   0,   0,   PlantExitFace_AcrossOffset, 3 }, // BASE LEAF + CENTER LEAF
+  { 1, 0, 1,  0,   0,   DC,  PlantExitFace_None,         1 }, // BASE LEAF
+  { 0, 0, 0,  0,   1,   DC,  PlantExitFace_AcrossOffset, 3 }, // BASE LEAF + CENTER LEAF
+  
+// STAGE 2 (MAYBE FLOWER)
+//  G1 G2 W   WFG  AS,  UN,  EXITS                       R
+  { 1, 1, 1,  0,   0,   DC,  PlantExitFace_None,         1 }, // BASE LEAF
+  { 0, 0, 0,  0,   0,   DC,  PlantExitFace_AcrossOffset, 3 }, // BASE LEAF + CENTER LEAF (end state 50%)
+  { 1, 1, 0,  0,   0,   DC,  PlantExitFace_AcrossOffset, 3 }, // BASE LEAF + CENTER LEAF
+  { 0, 0, 0,  0,   0,   DC,  PlantExitFace_AcrossOffset, 3 }, // BASE LEAF + CENTER LEAF (end state 25%)
+  { 1, 1, 0,  0,   0,   DC,  PlantExitFace_AcrossOffset, 3 }, // BASE LEAF + CENTER LEAF (choose flower side)
+  { 0, 0, 0,  0,   0,   DC,  PlantExitFace_AcrossOffset, 19 }, // BASE LEAF + CENTER LEAF + LEFT FLOWER
+  { 0, 0, 0,  0,   0,   DC,  PlantExitFace_AcrossOffset, 20 }, // BASE LEAF + CENTER LEAF + RIGHT FLOWER
 };
 
 PlantStateNode plantStateGraphSeaweed[] =
 {
 // BASE
 //  G1 G2 W   WFG  AS,  UN,  EXITS                       R
-  { 0, 0, 0,  0,   1,   0,   PlantExitFace_AcrossOffset, 13 }, // LEAF
+  { 0, 0, 0,  0,   1,   DC,  PlantExitFace_AcrossOffset, 13 }, // LEAF
 
-// BRANCHES
+// STAGE 1 (NORMAL)
 //  G1 G2 W   WFG  AS,  UN,  EXITS                       R
-  { 1, 0, 1,  0,   0,   0,   PlantExitFace_None,         1 }, // BASE LEAF
-  { 0, 0, 0,  0,   0,   0,   PlantExitFace_AcrossOffset, 3 }, // BASE LEAF + CENTER LEAF
-};
+  { 1, 1, 1,  0,   0,   DC,  PlantExitFace_None,         1 }, // BASE LEAF
+  { 0, 0, 0,  0,   0,   DC,  PlantExitFace_AcrossOffset, 3 }, // BASE LEAF + CENTER LEAF
+  { 0, 0, 0,  0,   1,   DC,  PlantExitFace_AcrossOffset, 3 }, // BASE LEAF + CENTER LEAF
 
-PlantStateNode plantStateGraphSlope[] =
-{
-// BASE
+// STAGE 2 (NORMAL)
 //  G1 G2 W   WFG  AS,  UN,  EXITS                       R
-  { 1, 0, 0,  1,   1,   0,   PlantExitFace_OneAcross,    13 }, // CENTER LEAF (WAIT FOR GROWTH)
-  { 0, 0, 0,  0,   1,   0,   PlantExitFace_OneAcross,    14 }, // CENTER BRANCH
-
-// STAGE 1 (STALK)
-//  G1 G2 W   WFG  AS,  UN,  EXITS                       R
-  { 1, 0, 1,  0,   0,   0,   PlantExitFace_None,         1 }, // BASE LEAF
-  { 1, 0, 0,  1,   1,   0,   PlantExitFace_OneAcross,    4 }, // BASE BRANCH + CENTER LEAF
-  { 1, 0, 1,  0,   1,   0,   PlantExitFace_OneAcross,    5 }, // BASE BRANCH + CENTER BRANCH
-  { 0, 0, 0,  0,   1,   0,   PlantExitFace_OneAcross,    6 }, // BASE BRANCH + CENTER BRANCH + SIDE LEAVES
-
-// STAGE 2 (DROOP)
-//  G1 G2 W   WFG  AS,  UN,  EXITS                       R
-  { 1, 1, 1,  0,   0,   0,   PlantExitFace_None,         1 }, // BASE LEAF
-  { 0, 0, 0,  0,   0,   0,   PlantExitFace_AcrossOffset, 3 }, // BASE LEAF + CENTER LEAF
-  { 0, 0, 0,  0,   1,   0,   PlantExitFace_AcrossOffset, 3 }, // BASE LEAF + CENTER LEAF (ADVANCE STAGE)
+  { 1, 1, 1,  0,   0,   DC,  PlantExitFace_None,         1 }, // BASE LEAF
+  { 0, 0, 0,  0,   0,   DC,  PlantExitFace_AcrossOffset, 3 }, // BASE LEAF + CENTER LEAF
+  { 0, 0, 0,  0,   1,   DC,  PlantExitFace_AcrossOffset, 3 }, // BASE LEAF + CENTER LEAF
 
 // STAGE 3 (FLOWER)
 //  G1 G2 W   WFG  AS,  UN,  EXITS                       R
-  { 1, 0, 1,  0,   0,   0,   PlantExitFace_None,         1 }, // BASE LEAF
-  { 1, 0, 1,  0,   0,   0,   PlantExitFace_None,         15 }, // BASE LEAF + CENTER FLOWER
-  { 0, 0, 0,  0,   0,   0,   PlantExitFace_None,         16 }, // BASE FLOWER + SIDE LEAVES
+  { 1, 0, 1,  0,   0,   DC,  PlantExitFace_None,         1 }, // BASE LEAF
+  { 1, 0, 1,  0,   0,   DC,  PlantExitFace_None,         15 }, // BASE LEAF + CENTER FLOWER
+  { 0, 0, 0,  0,   0,   DC,  PlantExitFace_None,         16 }, // BASE LEAF + CENTER FLOWER + SIDE LEAVES
+};
+
+PlantStateNode plantStateGraphDangle[] =
+{
+// BASE
+//  G1 G2 W   WFG  AS,  UN,  EXITS                       R
+  { 1, 0, 0,  1,   1,   DC,  PlantExitFace_OneAcross,    13 }, // CENTER LEAF (WAIT FOR GROWTH)
+  { 0, 0, 0,  0,   1,   DC,  PlantExitFace_OneAcross,    14 }, // CENTER BRANCH
+
+// STAGE 1 (STALK)
+//  G1 G2 W   WFG  AS,  UN,  EXITS                       R
+  { 1, 0, 1,  0,   0,   DC,  PlantExitFace_None,         1 }, // BASE LEAF
+  { 1, 0, 0,  1,   1,   DC,  PlantExitFace_OneAcross,    4 }, // BASE BRANCH + CENTER LEAF
+  { 1, 0, 1,  0,   1,   DC,  PlantExitFace_OneAcross,    5 }, // BASE BRANCH + CENTER BRANCH
+  { 0, 0, 0,  0,   1,   DC,  PlantExitFace_OneAcross,    6 }, // BASE BRANCH + CENTER BRANCH + SIDE LEAVES
+
+// STAGE 2 (DROOP)
+//  G1 G2 W   WFG  AS,  UN,  EXITS                       R
+  { 1, 1, 1,  0,   0,   DC,  PlantExitFace_None,         1 }, // BASE LEAF
+  { 0, 0, 0,  0,   0,   DC,  PlantExitFace_AcrossOffset, 3 }, // BASE LEAF + CENTER LEAF
+  { 0, 0, 0,  0,   1,   DC,  PlantExitFace_AcrossOffset, 3 }, // BASE LEAF + CENTER LEAF (ADVANCE STAGE)
+
+// STAGE 3 (FLOWER)
+//  G1 G2 W   WFG  AS,  UN,  EXITS                       R
+  { 1, 0, 1,  0,   0,   DC,  PlantExitFace_None,         1 }, // BASE LEAF
+  { 1, 0, 1,  0,   0,   DC,  PlantExitFace_None,         15 }, // BASE LEAF + CENTER FLOWER
+  { 0, 0, 0,  0,   0,   DC,  PlantExitFace_None,         16 }, // BASE LEAF + CENTER FLOWER + SIDE LEAVES
 };
 
 struct PlantParams
 {
   PlantStateNode *stateGraph;
-  byte leafColorR         : 3;
-  byte leafColorG         : 3;
-  byte leafColorB         : 2;
+  ColorByte leafColor;
 };
-#endif
 
 #define TREE_BRANCH_NODE_INDEX 3
-#define RGB_LEAF           0>>5, 255>>5,  0>>6
-
-#if INCLUDE_FLORA
-#define RGB_LEAF_VINE      0>>5, 192>>5, 64>>6
-#define RGB_LEAF_SEAWEED 128>>5, 160>>5,  0>>6
-#define RGB_LEAF_SLOPE   160>>5,  64>>5,  0>>6
+#define RGB_LEAF           0>>5>>DIM_COLORS, 255>>5>>DIM_COLORS,  0>>6>>DIM_COLORS
+#define RGB_LEAF_VINE      0>>5>>DIM_COLORS, 192>>5>>DIM_COLORS, 64>>6>>DIM_COLORS
+#define RGB_LEAF_SEAWEED 128>>5>>DIM_COLORS, 160>>5>>DIM_COLORS,  0>>6>>DIM_COLORS
+#define RGB_LEAF_DANGLE  160>>5>>DIM_COLORS,  64>>5>>DIM_COLORS,  0>>6>>DIM_COLORS
 
 PlantParams plantParams[] =
 {
@@ -478,25 +546,16 @@ PlantParams plantParams[] =
   {  plantStateGraphTree,     RGB_LEAF,         },
   {  plantStateGraphVine,     RGB_LEAF_VINE,    },
   {  plantStateGraphSeaweed,  RGB_LEAF_SEAWEED, },
-  {  plantStateGraphSlope,    RGB_LEAF_SLOPE,   },
+  {  plantStateGraphDangle,   RGB_LEAF_DANGLE,  },
 };
 
-struct PlantBranchStageIndexes
+byte plantBranchStageIndexes[][4] =
 {
-  byte stage1 : 3;
-  byte stage2 : 5;
-  byte stage3 : 5;
+  { 0, 2, 7, 12 },
+  { 0, 1, 3, 0 },
+  { 0, 1, 4, 7 },
+  { 0, 2, 6, 9 },
 };
-
-PlantBranchStageIndexes plantBranchStageIndexes[] =
-{
-  { 2, 7, 12 },
-  { 1, 0, 0 },
-  { 1, 0, 0 },
-  { 2, 6, 9 },
-};
-
-#endif
 
 // Timer that controls how often a plant must pay its maintenance cost or else wither.
 // Should be slightly longer than the energy distribution rate so there's always time
@@ -504,42 +563,25 @@ PlantBranchStageIndexes plantBranchStageIndexes[] =
 #define PLANT_MAINTAIN_RATE (PLANT_ENERGY_RATE + 2000)
 Timer plantMaintainTimer;
 
-struct PlantStateInfo
-{
-  /*
-  byte plantType            : 8;
-  byte plantBranchStage     : 8;
-  byte plantStateNodeIndex  : 8;
-  byte plantRootFace        : 3;
-  char plantExitFaceOffset  : 3;   // needs to be signed for +1/0/-1
-  byte plantChildBranchGrew : 1;
-  byte plantWitherState1    : 8;
-  byte plantWitherState2    : 8;
-  byte plantNumLeaves       : 8;
-  */
-};
-PlantStateInfo plantStateInfo;
-//#define PLANT_INFO(field) plantStateInfo.field
-#define PLANT_INFO(field) field
-
 byte plantType = PlantType_None;
 byte plantStateNodeIndex;
 byte plantRootFace;
 byte plantWitherState1;
 byte plantWitherState2;
 byte plantNumLeaves;
+bool plantHasFlower = false;
 byte plantEnergy;
 #if DEBUG_PLANT_ENERGY
 byte debugPlantEnergy;
 #endif
 
-#if INCLUDE_FLORA
 byte plantBranchStage;
 char plantExitFaceOffset;     // for plants that are gravity based
-#endif
 
 bool plantIsInResetState;
+#ifndef DISABLE_CHILD_BRANCH_GREW
 bool plantChildBranchGrew;
+#endif
 
 
 // Sun
@@ -551,12 +593,83 @@ byte gatheredSun;
 //
 #define BUG_FLAP_RATE 100
 Timer bugFlapTimer;
-#define BUG_MOVE_RATE 7
+#define BUG_NUM_FLAPS 7
 
 byte bugTargetCorner  = 0;
 char bugDistance      = 0;
 char bugDirection     = 1;
-byte bugFlapOpen      = 0;
+bool bugFlapOpen      = false;
+
+// -------------------------------------------------------------------------------------------------
+// FISH
+//
+#define FISH_MOVE_RATE 2000
+Timer fishMoveTimer;
+Timer fishTailTimer;
+
+enum FishTopFace
+{
+  FishTopFace_Face1,
+  FishTopFace_Face3,
+  FishTopFace_Face5,
+};
+
+//byte fishFacesToColor[][2] = { { 1, 2 }, { 3, 3 }, { 5, 4 } };    // top and bottom fish faces
+
+enum FishSwimDir
+{
+  FishSwimDir_Left,
+  FishSwimDir_Right,
+};
+
+struct FishInfo
+{
+  FishTopFace topFace : 2;
+  FishSwimDir swimDir : 1;
+  byte colorIndex     : 3;
+};
+FishInfo fishInfo;
+
+bool fishTransferAccepted = false;
+
+byte fishTailColorIndex;
+
+ColorByte fishColors[] =
+{
+  RGB_FISH1,
+  RGB_FISH2,
+  RGB_FISH3,
+  RGB_FISH4,
+  RGB_FISH5,
+  RGB_FISH6,
+  RGB_FISH7,
+  RGB_FISH8,
+};
+
+// -------------------------------------------------------------------------------------------------
+// CRAWLY
+//
+
+#define CRAWLY_MOVE_RATE 1000
+Timer crawlyMoveTimer;
+
+enum CrawlDir
+{
+  CrawlDir_CW,
+  CrawlDir_CCW,
+};
+
+#define CRAWLY_INVALID_FACE 6
+
+CrawlDir crawlyDir;
+byte crawlyHeadFace = CRAWLY_INVALID_FACE;
+byte crawlyTailFace = CRAWLY_INVALID_FACE;
+byte crawlyFadeFace = CRAWLY_INVALID_FACE;
+bool crawlyTransferAttempted = false;
+bool crawlyTransferAccepted = false;
+char crawlyTransferDelay = 0;
+byte crawlySpawnFace;
+byte crawlyRateScale = 0;
 
 // =================================================================================================
 //
@@ -594,7 +707,11 @@ void setup()
 void resetCommOnFace(byte f)
 {
   // Clear the queue
+#ifdef OLD_COMM_QUEUE
   commInsertionIndexes[f] = 0;
+#else
+  commInsertionIndex = 0;
+#endif
 
   FaceState *faceState = &faceStates[f];
 
@@ -623,7 +740,8 @@ void enqueueCommOnFace(byte f, Command command, byte data)
   {
     return;
   }
-  
+
+#ifdef OLD_COMM_QUEUE
   if (commInsertionIndexes[f] >= COMM_QUEUE_SIZE)
   {
     // Buffer overrun - might need to increase queue size to accommodate
@@ -632,6 +750,13 @@ void enqueueCommOnFace(byte f, Command command, byte data)
 #endif
     return;
   }
+#else
+  if (commInsertionIndex >= COMM_QUEUE_SIZE)
+  {
+    // Outgoing queue is full - just drop the packet
+    return;
+  }
+#endif
 
 #if DETECT_COMM_ERRORS
   if (data & 0xF0)
@@ -639,17 +764,26 @@ void enqueueCommOnFace(byte f, Command command, byte data)
     commInsertionIndexes[f] = COMM_DATA_OVERRUN;
   }
 #endif
-  
+
+#ifdef OLD_COMM_QUEUE
   byte index = commInsertionIndexes[f];
   commQueues[f][index].command = command;
   commQueues[f][index].data = data;
   commInsertionIndexes[f]++;
+#else
+  commQueue[commInsertionIndex].face = f;
+  commQueue[commInsertionIndex].command = command;
+  commQueue[commInsertionIndex].data = data;
+  commInsertionIndex++;
+#endif
 }
 
 // Called every iteration of loop(), preferably before any main processing
 // so that we can act on any new data being received.
 void updateCommOnFaces()
 {
+  numNeighbors = 0;
+
   FOREACH_FACE(f)
   {
     FaceState *faceState = &faceStates[f];
@@ -661,6 +795,9 @@ void updateCommOnFaces()
       resetCommOnFace(f);
       faceState->flags &= ~FaceFlag_NeighborPresent;
       faceState->flags &= ~FaceFlag_NeighborWaterFull;
+
+      // No neighbor is a good place to spawn a crawly
+      crawlySpawnFace = f;
       continue;
     }
 
@@ -674,6 +811,7 @@ void updateCommOnFaces()
 #endif
 
     faceState->flags |= FaceFlag_NeighborPresent;
+    numNeighbors++;
 
     // Read the neighbor's face value it is sending to us
     byte val = getLastValueReceivedOnFace(f);
@@ -715,15 +853,34 @@ void updateCommOnFaces()
     // Recognize this when their ACK bit equals our current TOGGLE bit.
     if (faceState->faceValueIn.ack == faceState->faceValueOut.toggle)
     {
+#ifndef OLD_COMM_QUEUE
+      byte commIndex = 0;
+
+      for (; commIndex < commInsertionIndex; commIndex++)
+      {
+        if (commQueue[commIndex].face == f)
+        {
+          break;
+        }
+      }
+#endif
+
       // If we just sent the DATA half of the previous comm, check if there 
       // are any more commands to send.
       if (faceState->faceValueOut.toggle == TOGGLE_DATA)
       {
+#ifdef OLD_COMM_QUEUE
         if (commInsertionIndexes[f] == 0)
         {
           // Nope, no more comms to send - bail and wait
           continue;
         }
+#else
+        if (commIndex >= commInsertionIndex)
+        {
+          continue;
+        }
+#endif
       }
 
       // Send the next value, either COMMAND or DATA depending on the toggle bit
@@ -732,22 +889,34 @@ void updateCommOnFaces()
       faceState->faceValueOut.toggle = ~faceState->faceValueOut.toggle;
       
       // Grab the first element in the queue - we'll need it either way
-      CommandAndData commandAndData = commQueues[f][0];
+#ifdef OLD_COMM_QUEUE
+      // [OPTIMIZE] saved 18 bytes - changed to a pointer
+      CommandAndData *commandAndData = &commQueues[f][0];
+#else
+      CommandAndData *commandAndData = &commQueue[commIndex];
+#endif
 
       // Send either the command or data depending on the toggle bit
       if (faceState->faceValueOut.toggle == TOGGLE_COMMAND)
       {
-        faceState->faceValueOut.value = commandAndData.command;
+        faceState->faceValueOut.value = commandAndData->command;
       }
       else
       {
-        faceState->faceValueOut.value = commandAndData.data;
+        faceState->faceValueOut.value = commandAndData->data;
   
         // No longer need this comm - shift everything towards the front of the queue
+#ifdef OLD_COMM_QUEUE
         for (byte commIndex = 1; commIndex < COMM_QUEUE_SIZE; commIndex++)
         {
           commQueues[f][commIndex-1] = commQueues[f][commIndex];
         }
+#else
+        for (; commIndex < commInsertionIndex; commIndex++)
+        {
+          commQueue[commIndex] = commQueue[commIndex+1];
+        }
+#endif
 
         // Adjust the insertion index since we just shifted the queue
 #if DETECT_COMM_ERRORS
@@ -760,7 +929,13 @@ void updateCommOnFaces()
         else
         {
 #endif
+
+#ifdef OLD_COMM_QUEUE
           commInsertionIndexes[f]--;
+#else
+          commInsertionIndex--;
+#endif
+
 #if DETECT_COMM_ERRORS
         }
 #endif
@@ -803,6 +978,9 @@ void loop()
   // Update neighbor presence and comms
   updateCommOnFaces();
 
+  // Update the helper array to translate logical to physical faces
+  gravityRelativeFace = &faceOffsetArray[gravityUpFace];
+
 #if DEBUG_COMMS
   if (sendNewStateTimer.isExpired())
   {
@@ -823,6 +1001,8 @@ void loop()
   loopDirt();
   loopPlantMaintain();
   loopBug();
+  loopFish();
+  loopCrawly();
 
   // Update water levels and such
   postProcessState();
@@ -848,7 +1028,7 @@ void handleUserInput()
 
     if (clicks == 5)
     {
-      // Five (or more) clicks resets this tile
+      // Five clicks resets this tile
       resetOurState();
     }
 #if DEBUG_PLANT_ENERGY
@@ -858,7 +1038,7 @@ void handleUserInput()
     }
 #endif
 #if DEBUG_SPAWN_BUG
-    else if (clicks == 4)
+    if (clicks == 4)
     {
       if (tileFlags & TileFlag_HasBug)
       {
@@ -866,7 +1046,38 @@ void handleUserInput()
       }
       else
       {
-        trySpawnBug();
+        tileFlags |= TileFlag_HasBug;
+      }
+    }
+#endif
+#if DEBUG_SPAWN_FISH
+    if (clicks == 4)
+    {
+      if (tileFlags & TileFlag_HasFish)
+      {
+        tileFlags &= ~TileFlag_HasFish;
+      }
+      else
+      {
+        tileFlags |= TileFlag_HasFish;
+        fishInfo.topFace = FishTopFace_Face5;
+        fishInfo.colorIndex = millis() & 0x7;
+      }
+    }
+#endif
+#if DEBUG_SPAWN_CRAWLY
+    if (clicks == 4)
+    {
+      if (tileFlags & TileFlag_HasCrawly)
+      {
+        tileFlags &= ~TileFlag_HasCrawly;
+      }
+      else
+      {
+        tileFlags |= TileFlag_HasCrawly;
+        crawlyDir = CrawlDir_CW;
+        crawlyHeadFace = 0;
+        crawlyTailFace = CRAWLY_INVALID_FACE;
       }
     }
 #endif
@@ -890,11 +1101,11 @@ void handleUserInput()
     else
     {
       tileFlags |= TileFlag_HasDripper;
-      gravityUpFace = 0;  // dripper defines gravity
+      gravityUpFace = DEFAULT_GRAVITY_UP_FACE;  // dripper defines gravity
     }
   }
 
-  if (buttonSingleClicked() && !hasWoken())
+  if (buttonSingleClicked())// && !hasWoken())
   {
     // Adjust dripper speed or sun direction
     if (tileFlags & TileFlag_HasDripper)
@@ -909,6 +1120,14 @@ void handleUserInput()
     {
       tileFlags ^= TileFlag_DirtIsFertile;
     }
+
+    if (tileFlags & TileFlag_HasCrawly)
+    {
+      crawlyRateScale = crawlyRateScale ? 0 : 1;
+    }
+
+    // Button clicks are also how we try to spawn critters from flowers
+    trySpawnCritter();
   }
 }
 
@@ -933,9 +1152,15 @@ void resetOurState()
 
     faceState->waterLevel = 0;
     faceState->waterAdded = 0;
+#ifndef ENABLE_DIRT_RESERVOIR
     faceState->waterStored = 0;
+#endif
   }
-  
+
+#ifdef ENABLE_DIRT_RESERVOIR
+  reservoir = 0;
+#endif
+
   resetPlantState();
   
 #if TRACK_FRAME_TIME
@@ -963,8 +1188,12 @@ void processCommForFace(Command command, byte value, byte f)
       break;
 
     // Water received from a neighbor
-    case Command_WaterAdd:
+    case Command_AddWater:
       faceState->waterAdded += value;
+      
+      // Clear our full flag since the neighbor clearly thinks we are not full
+      // If we are actually full then this will get set and we'll send another message to update the neighbor
+      faceState->flags &= ~FaceFlag_WaterFull;
       break;
 
     case Command_GravityDir:
@@ -1010,26 +1239,80 @@ void processCommForFace(Command command, byte value, byte f)
       break;
 
     case Command_TransferBug:
-    case Command_TransferBugCW:
       if (!(tileFlags & TileFlag_HasBug) && !(tileFlags & TileFlag_HasDirt) && !(faceStates[f].flags & FaceFlag_WaterFull))
       {
         // No bug in this tile - transfer accepted
         tileFlags |= TileFlag_HasBug;
+#if 1
+        bugTargetCorner = CW_FROM_FACE(f, value);
+#else
         bugTargetCorner = (command == Command_TransferBug) ? f : CW_FROM_FACE(f, 1);
-        bugDistance  = 64;
+#endif
+        bugDistance  = BUG_NUM_FLAPS;
         bugDirection = -1;  // start going towards the middle
-        bugFlapOpen = 0;    // looks better starting closed
+        //bugFlapOpen = 0;    // looks better starting closed
         
         // Notify the sender
-        enqueueCommOnFace(f, Command_BugAccepted, value);
+        enqueueCommOnFace(f, Command_Accepted, command);
       }
       break;
 
-    case Command_BugAccepted:
-      // Bug transferred! Remove ours
-      tileFlags &= ~TileFlag_HasBug;
+    case Command_TransferFish:
+      if (!(tileFlags & TileFlag_HasFish) && !(tileFlags & TileFlag_HasDirt) && (tileFlags & TileFlag_Submerged))
+      {
+        // Transfer accepted
+        tileFlags |= TileFlag_HasFish;
+        fishInfo = *((FishInfo*) &value);
+        fishMoveTimer.set(FISH_MOVE_RATE);
+        
+        // Notify the sender
+        enqueueCommOnFace(f, Command_Accepted, command);
+      }
       break;
 
+    case Command_FishTail:
+      fishTailColorIndex = value;
+      fishTailTimer.set(FISH_MOVE_RATE);
+      break;
+
+    case Command_TransferCrawly:
+      if (!(tileFlags & TileFlag_HasCrawly))
+      {
+        // Transfer accepted
+        tileFlags |= TileFlag_HasCrawly;
+        enqueueCommOnFace(f, Command_Accepted, command);
+
+        crawlyDir = (CrawlDir) (value & 0x1);
+        crawlyRateScale = value >> 1;
+        crawlyHeadFace = f;
+        crawlyTailFace = CRAWLY_INVALID_FACE;
+        //crawlyFadeFace = CRAWLY_INVALID_FACE;
+
+        crawlyMoveTimer.set(CRAWLY_MOVE_RATE>>1);
+        crawlyTransferDelay = 2;  // countdown: 2 = don't show, 1 = don't move
+      }
+      break;
+
+    case Command_Accepted:
+      if (value == Command_TransferBug)
+      {
+        // Bug transferred! Remove ours
+        tileFlags &= ~TileFlag_HasBug;
+      }
+      else if (value == Command_TransferFish)
+      {
+        // Fish transferred!
+        // Don't turn off our fish until the timer expires
+        fishTransferAccepted = true;
+      }
+      else if (value == Command_TransferCrawly)
+      {
+        // Crawly transferred!
+        crawlyTransferAccepted = true;
+      }
+      break;
+
+#ifndef DISABLE_CHILD_BRANCH_GREW
     case Command_ChildBranchGrew:
       if (plantType != PlantType_None)
       {
@@ -1040,6 +1323,7 @@ void processCommForFace(Command command, byte value, byte f)
         }
       }
       break;
+#endif
 
     case Command_GatherSun:
       if (gatheredSun < MAX_GATHERED_SUN)
@@ -1051,46 +1335,26 @@ void processCommForFace(Command command, byte value, byte f)
     case Command_QueryPlantType:
       if (plantType != PlantType_None)
       {
-#if INCLUDE_FLORA
+        // Combine the plant type and branch stage into one value to send
+
+        // Branch stage optionally increments
         byte stage = plantBranchStage;
         if (plantParams[plantType].stateGraph[plantStateNodeIndex].advanceStage)
         {
           stage++;
         }
 
-        // Querying the plant type sends the branch stage first, incremented if necessary
-        enqueueCommOnFace(f, Command_BranchStage, stage);
-#endif
-        
-        // Send the plant type back
-        enqueueCommOnFace(f, Command_PlantType, plantType);
+        enqueueCommOnFace(f, Command_PlantType, stage | (plantType << 2));
       }
       break;
-
-#if INCLUDE_FLORA
-    case Command_BranchStage:
-      plantBranchStage = value;
-      break;
-#endif
 
     case Command_PlantType:
       if (plantType == PlantType_None)
       {
-        if (value < PlantType_MAX)    // for non-FLORA tiles, don't break if we get an invalid plant type
-        {
-          plantType = value;
-#if INCLUDE_FLORA
-          switch (plantBranchStage)
-          {
-            case 1: plantStateNodeIndex = plantBranchStageIndexes[plantType].stage1; break;
-            case 2: plantStateNodeIndex = plantBranchStageIndexes[plantType].stage2; break;
-            default: plantStateNodeIndex = plantBranchStageIndexes[plantType].stage3; break;
-          }
-#else
-          plantStateNodeIndex = TREE_BRANCH_NODE_INDEX;
-#endif
-          plantIsInResetState = true;
-        }
+        plantBranchStage = value & 0x3;
+        plantType = value >> 2;
+        plantStateNodeIndex = plantBranchStageIndexes[plantType][plantBranchStage];
+        plantIsInResetState = true;
       }
       break;
       
@@ -1143,20 +1407,22 @@ void loopDripper()
 // WATER
 // -------------------------------------------------------------------------------------------------
 
+// Changing these bit fields to be full bytes saves code space due to the unpacking required
+// However, by making dstFace 4 bits instead of 3 I found the difference is smaller
+// If full bytes = 0 extra, 3/3/1 is 30 bytes extra, 3/4/1 is 16 bytes extra
 struct WaterFlowCommand
 {
   byte srcFace : 3;
-  byte dstFace : 3;
-  byte isNeighbor : 1;
+  byte dstFace : 4;
   byte halfWater : 1;
 };
 
 WaterFlowCommand waterFlowSequence[] =
 {
-  { 3, 3, 1, 0 },   // fall from face 3 down out of this tile
-  { 0, 3, 0, 0 },   // top row falls into bottom row
-  { 1, 2, 0, 0 },   // ...
-  { 5, 4, 0, 0 },   // ...
+  { 3, 3, 0 },   // fall from face 3 down out of this tile
+  { 0, 3, 0 },   // top row falls into bottom row
+  { 1, 2, 0 },   // ...
+  { 5, 4, 0 },   // ...
 
   // When flowing to sides, every other command has 'halfWater' set
   // so that the first will send half and then the next will send the
@@ -1165,18 +1431,18 @@ WaterFlowCommand waterFlowSequence[] =
   // but not a right, it will only send half the water. While if there
   // is a right neighbor but not a left it will send it all.
   // Hope no one notices shhhhh
-  { 5, 0, 0, 1 },   // flow to sides
-  { 5, 5, 1, 0 },
-  { 4, 3, 0, 1 },
-  { 4, 4, 1, 0 },
-  { 0, 5, 0, 1 },
-  { 0, 1, 0, 0 },
-  { 3, 4, 0, 1 },
-  { 3, 2, 0, 0 },
-  { 1, 0, 0, 1 },
-  { 1, 1, 1, 0 },
-  { 2, 3, 0, 1 },
-  { 2, 2, 1, 0 }
+  { 5, 0, 1 },   // flow to sides
+  { 5, 5, 0 },
+  { 4, 3, 1 },
+  { 4, 4, 0 },
+  { 0, 5, 1 },
+  { 0, 1, 0 },
+  { 3, 4, 1 },
+  { 3, 2, 0 },
+  { 1, 0, 1 },
+  { 1, 1, 0 },
+  { 2, 3, 1 },
+  { 2, 2, 0 }
 };
 
 void loopWater()
@@ -1186,10 +1452,21 @@ void loopWater()
     return;
   }
 
+#ifdef OPTIMIZE
+  // Assume the tile is submerged (has water in all six faces)
+  // This flag will be cleared below if this isn't true
+  tileFlags |= TileFlag_Submerged;
+#endif
+
   for (int waterFlowIndex = 0; waterFlowIndex < 16; waterFlowIndex++)
   {
     WaterFlowCommand command = waterFlowSequence[waterFlowIndex];
 
+    // Get src/dst faces factoring in gravity direction
+#ifdef OPTIMIZE   // [OPTIMIZE] saves 10 bytes
+    byte srcFace = gravityRelativeFace[command.srcFace];
+    byte dstFace = gravityRelativeFace[command.dstFace];
+#else
     byte srcFace = command.srcFace;
     byte dstFace = command.dstFace;
 
@@ -1198,33 +1475,43 @@ void loopWater()
     byte gravityCCWAmount = 6 - gravityUpFace;
     srcFace = CCW_FROM_FACE(srcFace, gravityCCWAmount);
     dstFace = CCW_FROM_FACE(dstFace, gravityCCWAmount);
-    
+#endif
+
     FaceState *faceStateSrc = &faceStates[srcFace];
     FaceState *faceStateDst = &faceStates[dstFace];
 
     byte amountToSend = MIN(faceStateSrc->waterLevel >> command.halfWater, WATER_FLOW_AMOUNT);
     if (amountToSend > 0)
     {
-      if (command.isNeighbor)
+      if (command.srcFace == command.dstFace)
       {
+        // Sending to a neighbor tile
         if (faceStateSrc->flags & FaceFlag_NeighborPresent)
         {
           // Only send to neighbor if they haven't set their 'full' flag
           if (!(faceStateDst->flags & FaceFlag_NeighborWaterFull))
           {
-            enqueueCommOnFace(dstFace, Command_WaterAdd, amountToSend);
+            enqueueCommOnFace(dstFace, Command_AddWater, amountToSend);
             faceStateSrc->waterLevel -= amountToSend;
           }
         }
       }
-      else if ((faceStateDst->flags & FaceFlag_WaterFull) == 0)
+      else if (!(faceStateDst->flags & FaceFlag_WaterFull))
       {
         faceStateDst->waterAdded += amountToSend;
         faceStateSrc->waterLevel -= amountToSend;
       }
     }
+    else
+    {
+#ifdef OPTIMIZE
+      // No water in this face - tile isn't submerged
+      tileFlags &= ~TileFlag_Submerged;
+#endif
+    }
   }
 
+#ifndef OPTIMIZE // [OPTIMIZE] saves 68 bytes - sacrifices some accuracy - meh
   // Determine if the tile is fully submerged (water in every face)
   tileFlags &= ~TileFlag_Submerged;
   if ((faceStates[0].waterLevel > 0) &&
@@ -1236,6 +1523,7 @@ void loopWater()
   {
     tileFlags |= TileFlag_Submerged;
   }
+#endif
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1266,18 +1554,33 @@ void propagateGravityDir()
   // Start sending from our version of "up" to make things easier to iterate
   byte f = gravityUpFace;
   char cwFromUp = 3;
+
   do
   {
     enqueueCommOnFace(f, Command_GravityDir, cwFromUp);
 
-    cwFromUp -= (cwFromUp > 0) ? 1 : -5;
-
-    f += (f < 5) ? 1 : -5;
-    if (f == gravityUpFace)
+#ifdef OPTIMIZE   // [OPTIMIZE] saves 4 bytes
+    cwFromUp--;
+    if (cwFromUp < 0)
     {
-      break;  // done when we wrap around back to the start
+      cwFromUp = 5;
     }
-  } while(1);
+#else
+    cwFromUp -= (cwFromUp > 0) ? 1 : -5;
+#endif
+
+#ifdef OPTIMIZE   // [OPTIMIZE] saves 2 bytes
+    f++;
+    if (f >= 6)
+    {
+      f = 0;
+    }
+#else
+    f += (f < 5) ? 1 : -5;
+#endif
+
+    // Done when we wrap around back to the start
+  } while(f != gravityUpFace);
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1304,40 +1607,56 @@ void loopDirt()
     return;
   }
 
-//#if INCLUDE_FLORA
+#ifdef ENABLE_DIRT_RESERVOIR
+  if (reservoir == 0)
+  {
+    return;
+  }
+#else
+  byte *reservoir = &faceStates[3].waterStored;
+
   // Suck water from the side dirt tiles to the center
-  if (faceStates[3].waterStored < MAX_WATER_LEVEL)
+  if (*reservoir < MAX_WATER_LEVEL)
   {
     if (faceStates[2].waterStored > 0)
     {
       faceStates[2].waterStored--;
-      faceStates[3].waterStored++;
+      *reservoir += 1;
     }
     if (faceStates[4].waterStored > 0)
     {
       faceStates[4].waterStored--;
-      faceStates[3].waterStored++;
+      *reservoir += 1;
     }
   }
-//#endif
 
-  byte *reservoir = &faceStates[3].waterStored;
   if (*reservoir == 0)
   {
     return;
   }
+#endif
 
   // Energy generation formula:
   // Up to X water = X energy (so that a plant can sprout without needing sunlight)
   // After that Y water + Y sun = PLANT_ENERGY_PER_SUN*Y energy
 
   // X water
+#ifndef ENABLE_DIRT_RESERVOIR
   byte energyToDistribute = (*reservoir > PLANT_ENERGY_FROM_WATER) ? PLANT_ENERGY_FROM_WATER : *reservoir;
   *reservoir -= energyToDistribute;
+#else
+  byte energyToDistribute = MIN(reservoir, PLANT_ENERGY_FROM_WATER);
+  reservoir -= energyToDistribute;
+#endif
 
   // Y sun + Y water
+#ifndef ENABLE_DIRT_RESERVOIR
   byte minWaterOrSun = MIN(*reservoir, gatheredSun);
   *reservoir -= minWaterOrSun;
+#else
+  byte minWaterOrSun = MIN(reservoir, gatheredSun);
+  reservoir -= minWaterOrSun;
+#endif
   energyToDistribute += minWaterOrSun * PLANT_ENERGY_PER_SUN;
   gatheredSun = 0;
 
@@ -1348,6 +1667,14 @@ void loopDirt()
 // -------------------------------------------------------------------------------------------------
 // PLANTS
 // -------------------------------------------------------------------------------------------------
+
+char plantExitFaceOffsetArray[PlantType_MAX][6] =
+{
+  {  0, -1, -1, 99,  1,  1 },   // tree
+  {  0, -1, -1, 99,  1,  1 },   // vine
+  { 99,  1,  1,  0, -1, -1 },   // seaweed
+  {  0, -1, -1, 99,  1,  1 },   // Dangle
+};
 
 void loopPlantMaintain()
 {
@@ -1364,31 +1691,36 @@ void loopPlantMaintain()
     return;
   }
 
-#if INCLUDE_FLORA
   PlantStateNode *plantStateNode = &plantParams[plantType].stateGraph[plantStateNodeIndex];
-#else
-  PlantStateNode *plantStateNode = &plantStateGraphTree[plantStateNodeIndex];
-#endif
 
-#if INCLUDE_FLORA
   // For gravity-based plants, rotate towards the desired direction (up or down)
+#if 1
   char rootRelativeToGravity = plantRootFace - gravityUpFace;
   if (rootRelativeToGravity < 0)
   {
     rootRelativeToGravity += 6;
   }
+#else
+  byte rootRelativeToGravity = gravityRelativeFace[plantRootFace];
 #endif
 
-#if INCLUDE_FLORA
   plantExitFaceOffset = 0;
   if (plantStateNode->exitFace == PlantExitFace_AcrossOffset)
   {
+#ifdef OPTIMIZE // [OPTIMIZE] saves 24 bytes - consumes 24 bytes of data
+    plantExitFaceOffset = plantExitFaceOffsetArray[plantType][rootRelativeToGravity];
+    if (plantExitFaceOffset == 99)
+    {
+      plantExitFaceOffset = 0;
+      plantEnergy = 0;
+    }
+#else
     if (plantType == PlantType_Seaweed)
     {
       switch (rootRelativeToGravity)
       {
         case 0: plantEnergy = 0;          break;   // pointing directly down - cannnot grow
-        case 1: 
+        case 1:
         case 2: plantExitFaceOffset = 1;  break;   // rotate CW by one face
         case 3:                           break;   // pointing directly up - all's good
         case 4:
@@ -1400,23 +1732,19 @@ void loopPlantMaintain()
       switch (rootRelativeToGravity)
       {
         case 0:                           break;   // pointing directly down - all's good
-        case 1: 
+        case 1:
         case 2: plantExitFaceOffset = -1; break;   // rotate CCW by one face
         case 3: plantEnergy = 0;          break;   // pointing directly up - cannnot grow
         case 4:
         case 5: plantExitFaceOffset = 1;  break;   // rotate CW by one face
       }
-    }
-  }
+     }
 #endif
+  }
 
   // Only seaweed can live under water
   bool plantIsSubmerged = tileFlags & TileFlag_Submerged;
-#if INCLUDE_FLORA
   bool plantIsAquatic = plantType == PlantType_Seaweed;
-#else
-  bool plantIsAquatic = false;
-#endif
   if (plantIsSubmerged != plantIsAquatic)
   {
     plantEnergy = 0;
@@ -1426,6 +1754,22 @@ void loopPlantMaintain()
   byte maintainCost = 1;
   if (plantEnergy < maintainCost)
   {
+#ifdef OPTIMIZE // [OPTIMIZE] saves 6 bytes
+    // Not enough energy - plant is dying
+    // Wither plant
+    plantStateNodeIndex = plantWitherState2;
+    plantWitherState2 = 0;
+    if (plantStateNodeIndex == 0)
+    {
+      plantStateNodeIndex = plantWitherState1;
+      plantWitherState1 = 0;
+      if (plantStateNodeIndex == 0)
+      {
+        // Can't wither any further - just go away entirely
+        resetPlantState();
+      }
+    }
+#else
     // Not enough energy - plant is dying
     // Wither plant
     if (plantWitherState2 > 0)
@@ -1434,15 +1778,16 @@ void loopPlantMaintain()
       plantWitherState2 = 0;
     }
     else if (plantWitherState1 > 0)
-    {
-      plantStateNodeIndex = plantWitherState1;
-      plantWitherState1 = 0;
+     {
+       plantStateNodeIndex = plantWitherState1;
+       plantWitherState1 = 0;
     }
     else
     {
       // Can't wither any further - just go away entirely
       resetPlantState();
     }
+#endif
     return;
   }
 
@@ -1450,12 +1795,31 @@ void loopPlantMaintain()
   plantEnergy -= maintainCost;
 }
 
+PlantType plantTypeSelection[6] =
+{
+  PlantType_Tree,
+  PlantType_Dangle,
+  PlantType_Vine,
+  PlantType_Vine,
+  PlantType_Vine,
+  PlantType_Dangle,
+};
+PlantType plantTypeSelectionSubmerged[6] =
+{
+  PlantType_Seaweed,
+  PlantType_Seaweed,
+  PlantType_None,
+  PlantType_None,
+  PlantType_None,
+  PlantType_Seaweed,
+};
+
 void loopPlantGrow()
 {
   // Plants use energy to stay alive and grow
   // This function is triggered when this tile receives plant energy from the root.
   // For dirt tiles, this is from loopDirt().
-  // Otherwise it is when this tile receives a DistEnergy message from the root face.
+  // Otherwise it is when this tile receives a DistEnergy message from its plant root.
 
   // If we don't already have a plant, try to grow one
   if (plantType == PlantType_None)
@@ -1476,14 +1840,15 @@ void loopPlantGrow()
     // Determine plant type by
     //   (1) tile orientation relative to gravity
     //   (2) being underwater
+#if 1 // saves 14 bytes - adds 12 data bytes, but makes it easier to add new plant types
+    plantType = (tileFlags & TileFlag_Submerged) ? plantTypeSelectionSubmerged[gravityUpFace] : plantTypeSelection[gravityUpFace];
+#else
     if (gravityUpFace == 5 || gravityUpFace == 0 || gravityUpFace == 1)
     {
       // If submerged, grow seaweed
       if (tileFlags & TileFlag_Submerged)
       {
-#if INCLUDE_FLORA
         plantType = PlantType_Seaweed;
-#endif
       }
       else if (gravityUpFace == 0)
       {
@@ -1492,17 +1857,14 @@ void loopPlantGrow()
       }
       else
       {
-#if INCLUDE_FLORA
-        plantType = PlantType_Slope;
-#endif
+        plantType = PlantType_Dangle;
       }
     }
     else
     {
-#if INCLUDE_FLORA
       plantType = PlantType_Vine;
-#endif
     }
+#endif
 
     if (plantType == PlantType_None)
     {
@@ -1510,15 +1872,13 @@ void loopPlantGrow()
       return;
     }
 
-#if INCLUDE_FLORA
     plantBranchStage = 0;
-#endif
     plantStateNodeIndex = 0;
     plantRootFace = 3;
     plantIsInResetState = true;
   }
 
-  // First thing, send gathered sun down to the root
+  // Send gathered sun down to the root
   gatheredSun += plantNumLeaves;
   if (gatheredSun > 0)
   {
@@ -1530,11 +1890,7 @@ void loopPlantGrow()
   debugPlantEnergy = plantEnergy;
 #endif
 
-#if INCLUDE_FLORA
   PlantStateNode *plantStateNode = &plantParams[plantType].stateGraph[plantStateNodeIndex];
-#else
-  PlantStateNode *plantStateNode = &plantStateGraphTree[plantStateNodeIndex];
-#endif
 
   // Use energy to maintain the current state
   byte energyMaintain = 1;
@@ -1545,6 +1901,8 @@ void loopPlantGrow()
   }
   
   byte energyForGrowth = plantEnergy - energyMaintain;
+
+  // Assume we are spending/sending all remaining energy
   plantEnergy -= energyForGrowth;
 
   // Can we grow?
@@ -1555,7 +1913,9 @@ void loopPlantGrow()
     if (energyForGrowth >= growCost)
     {
       // Some states wait for a child branch to grow
+#ifndef DISABLE_CHILD_BRANCH_GREW
       if (plantIsInResetState || !plantStateNode->waitForGrowth || plantChildBranchGrew)
+#endif
       {
         if (plantIsInResetState)
         {
@@ -1596,10 +1956,12 @@ void loopPlantGrow()
         energyForGrowth -= growCost;
 
         // Next state might need to wait for a child branch!
+#ifndef DISABLE_CHILD_BRANCH_GREW
         plantChildBranchGrew = false;
 
         // Tell the root plant that something grew - in case it is waiting on us
         enqueueCommOnFace(plantRootFace, Command_ChildBranchGrew, 0);
+#endif
       }
     }
     else
@@ -1626,11 +1988,9 @@ void loopPlantGrow()
           sendEnergyToFace(4, (energyForGrowth+1)>>1);  // right branch gets the "round up" when odd
           break;
 
-#if INCLUDE_FLORA
         case PlantExitFace_AcrossOffset:
           sendEnergyToFace(3 + plantExitFaceOffset, energyForGrowth);
           break;
-#endif
       }
     }
   }
@@ -1646,7 +2006,9 @@ void resetPlantState()
 {
   plantType = PlantType_None;
   plantEnergy = 0;
+#ifndef DISABLE_CHILD_BRANCH_GREW
   plantChildBranchGrew = false;
+#endif
   gatheredSun = 0;
 #if DEBUG_PLANT_ENERGY
   debugPlantEnergy = 0;
@@ -1655,8 +2017,8 @@ void resetPlantState()
   plantWitherState1 = 0;
   plantWitherState2 = 0;
 
-  // Allow a new bug to spawn
-  tileFlags &= ~TileFlag_SpawnedBug;
+  // Allow a new critter to spawn
+  tileFlags &= ~TileFlag_SpawnedCritter;
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1677,26 +2039,33 @@ void loopBug()
   }
   bugFlapTimer.set(BUG_FLAP_RATE);
   
-  bugFlapOpen = 1 - bugFlapOpen;
+  bugFlapOpen = !bugFlapOpen;
 
   // Move the bug along its path
+#if 1 // saves 6 bytes
+  bugDistance += bugDirection;
+#else
   bugDistance += (bugDirection > 0) ? BUG_MOVE_RATE : -BUG_MOVE_RATE;
-  if (bugDistance > 64)
+#endif
+  if (bugDistance >= BUG_NUM_FLAPS)
   {
     // Start moving back towards the center
+#if 0 // saves 6 bytes - imperceptibly less accurate
     bugDistance = 64;
+#endif
     bugDirection = -1;
     
     // While doing this, try to transfer to neighbor cell
     // If the transfer is accepted then the bug will leave this tile
     byte otherFace = CCW_FROM_FACE(bugTargetCorner, 1);
-    byte tryTransferToFace = 0;
-    Command command = Command_None;
+
+    char tryTransferToFace = -1;
+    byte cwOffset = 0;
 
     if (faceStates[bugTargetCorner].flags & FaceFlag_NeighborPresent && !(faceStates[bugTargetCorner].flags & FaceFlag_NeighborWaterFull))
     {
       tryTransferToFace = bugTargetCorner;
-      command = Command_TransferBugCW;
+      cwOffset = 1;
     }
     
     if (faceStates[otherFace].flags & FaceFlag_NeighborPresent && !(faceStates[otherFace].flags & FaceFlag_NeighborWaterFull))
@@ -1704,21 +2073,23 @@ void loopBug()
       // Choose the other face if the first face isn't present
       // If both faces are present, then do a coin flip
       // Using the LSB of the time *should* be random enough for a coin flip
-      if (tryTransferToFace == 0 || millis() & 0x1)
+      if (tryTransferToFace == -1 || millis() & 0x1)
       {
         tryTransferToFace = otherFace;
-        command = Command_TransferBug;
+        cwOffset = 0;
       }
     }
 
-    if (command != Command_None)
+    if (tryTransferToFace != -1)
     {
-      enqueueCommOnFace(tryTransferToFace, command, 0); // data is DC
+      enqueueCommOnFace(tryTransferToFace, Command_TransferBug, cwOffset);
     }
   }
   else if (bugDistance < 0)
   {
+#if 0 // saves 4 bytes - imperceptibly less accurate
     bugDistance = 0;
+#endif
     bugDirection = 1;
     // Pick a different corner (50% opposite, 25% opposite-left, 25% opposite-right)
     char offset = (millis() & 0x1) ? 3 : ((millis() & 0x2) ? 2 : 4);
@@ -1726,28 +2097,284 @@ void loopBug()
   }
 }
 
-void trySpawnBug()
+// -------------------------------------------------------------------------------------------------
+// FISH
+// -------------------------------------------------------------------------------------------------
+
+// Information about how fish move from tile to tile
+struct FishMovementInfo
 {
-  // Each plant tile can only spawn one bug
-  if (tileFlags & TileFlag_SpawnedBug)
+  FishTopFace nextTopFace : 2;  // if the fish moves, where it will be within the destination tile
+  byte isNeighbor         : 1;  // flag if we need to attempt to transfer to a neighbor tile
+  byte destFace           : 3;  // the outgoing face to attempt the transfer (gravity relative)
+};
+FishMovementInfo fishMovementInfoLeft[3][2] =
+{
+  { { FishTopFace_Face3, 1, 0  }, { FishTopFace_Face3, 0, DC } },
+  { { FishTopFace_Face5, 0, DC }, { FishTopFace_Face5, 1, 3  } },
+  { { FishTopFace_Face1, 1, 5  }, { FishTopFace_Face1, 1, 4  } }
+};
+FishMovementInfo fishMovementInfoRight[3][2] =
+{
+  { { FishTopFace_Face5, 1, 1  }, { FishTopFace_Face5, 1, 2  } },
+  { { FishTopFace_Face1, 0, DC }, { FishTopFace_Face1, 1, 3  } },
+  { { FishTopFace_Face3, 1, 0  }, { FishTopFace_Face3, 0, DC } }
+};
+FishMovementInfo *fishChosenMovementInfo = null;
+
+void loopFish()
+{
+  if (!(tileFlags & TileFlag_HasFish))
   {
     return;
   }
 
-  // Check if we already have a bug
-  if (tileFlags & TileFlag_HasBug)
+  // Did the fish finish moving to its destination?
+  if (!fishMoveTimer.isExpired())
   {
     return;
-  }  
+  }
 
-  // Only 1/8 chance to spawn a bug
-  if (millis() & 0x7 != 0)
+  byte downFace = gravityRelativeFace[3];
+
+  if (fishChosenMovementInfo != null)
+  {
+    if (fishChosenMovementInfo->isNeighbor)
+    {
+      // If we tried to transfer the fish, check if it was accepted
+      if (fishTransferAccepted)
+      {
+        // Fish was transferred - turn ours off
+        tileFlags &= ~TileFlag_HasFish;
+    
+        // If we transferred upwards then the tail is still visible in this tile
+        if (fishChosenMovementInfo->nextTopFace == FishTopFace_Face3)
+        {
+          fishTailColorIndex = fishInfo.colorIndex;
+          fishTailTimer.set(FISH_MOVE_RATE);
+        }
+      }
+      else
+      {
+        // Fish was not transferred - turn around and try the other direction
+        fishInfo.swimDir = (fishInfo.swimDir == FishSwimDir_Left) ? FishSwimDir_Right : FishSwimDir_Left;
+      }
+    }
+    else
+    {
+      // Moved within our own cell - that's easy
+      fishInfo.topFace = fishChosenMovementInfo->nextTopFace;
+    }
+  }
+
+  // Done processing the previous move info
+  fishChosenMovementInfo = null;
+  
+  // If fish moved to a neighbor then nothing left to do here
+  if (!(tileFlags & TileFlag_HasFish))
   {
     return;
+  }
+
+  // Fish is still here - set up for the next move
+  fishMoveTimer.set(FISH_MOVE_RATE);
+
+  // If our tail pokes into a neighbor then tell that tile to show it
+  if (fishInfo.topFace == FishTopFace_Face3)
+  {
+    enqueueCommOnFace(downFace, Command_FishTail, fishInfo.colorIndex);
+  }
+
+  // Pick the next move based on direction (left or right) and coin flip (up or down)
+  byte randUpOrDown = millis() & 0x1;
+  if (!(tileFlags & TileFlag_Submerged))
+  {
+    // If this tile isn't full of water then force the fish to go down to try to find some
+    randUpOrDown = 1;
+  }
+  fishChosenMovementInfo = fishInfo.swimDir ? &fishMovementInfoRight[fishInfo.topFace][randUpOrDown] : &fishMovementInfoLeft[fishInfo.topFace][randUpOrDown];
+
+  if (fishChosenMovementInfo->isNeighbor)
+  {
+    // Next move is trying to go into a neighbor cell
+    // Send a transfer request to the given neighbor
+    // Will be ignored if the neighbor doesn't exist or can't accept the fish
+
+    // Mark that the transfer hasn't yet been accepted
+    // This flag will be set when we receive an ack from the neighbor
+    // The ack can be received any time until our next move, which is 1 sec
+    fishTransferAccepted = false;
+
+    // Convert from logical to physical face
+    byte transferFace = gravityRelativeFace[fishChosenMovementInfo->destFace];
+
+    // Construct the fish info struct for the receiver so they don't need to do any expensive calcs
+    FishInfo nextFishInfo = fishInfo;
+    nextFishInfo.topFace = fishChosenMovementInfo->nextTopFace;
+    enqueueCommOnFace(transferFace, Command_TransferFish, *((byte*)&nextFishInfo));
+  }
+}
+
+// -------------------------------------------------------------------------------------------------
+// CRAWLY
+// -------------------------------------------------------------------------------------------------
+
+void loopCrawly()
+{
+  if (!(tileFlags & TileFlag_HasCrawly))
+  {
+    return;
+  }
+
+  // Did the crawly finish moving?
+  if (!crawlyMoveTimer.isExpired())
+  {
+    return;
+  }
+  crawlyMoveTimer.set(crawlyRateScale ? (CRAWLY_MOVE_RATE>>1) : CRAWLY_MOVE_RATE);
+
+  // First two loops after a transfer we don't want to move
+  crawlyTransferDelay--;
+  if (crawlyTransferDelay > 0)
+  {
+    return;
+  }
+
+  // First, resolve the results of the previous move
+  // Did we attempt to transfer to a neighbor tile and, if so, was it accepted?
+  if (crawlyTransferAttempted)
+  {
+    crawlyTransferAttempted = false;
+    if (crawlyTransferAccepted)
+    {
+      // Crawly moved to a new tile
+      // Start invalidating it here
+      moveCrawlyToFace(CRAWLY_INVALID_FACE);
+      return;
+    }
   }
   
-  tileFlags |= TileFlag_HasBug;
-  tileFlags |= TileFlag_SpawnedBug;
+  // If crawly is in the process of leaving then just let it go
+  if (crawlyHeadFace == CRAWLY_INVALID_FACE)
+  {
+    // Keep invalidating the crawly in this tile until it is fully gone
+    moveCrawlyToFace(CRAWLY_INVALID_FACE);
+
+    if (crawlyFadeFace == CRAWLY_INVALID_FACE)
+    {
+      // Crawly is fully gone from this tile
+      tileFlags &= ~TileFlag_HasCrawly;
+    }
+
+    return;
+  }
+
+  // Got here so crawly is still in this tile
+  // Determine where it will (try to) go next
+  // 1. If no neighbor at destination, proceed CW or CCW
+  // 2. If neighbor at this face, try to transfer to the new tile
+  // 3. If transfer was blocked, turn around
+  byte cwFace = CW_FROM_FACE(crawlyHeadFace, 1);
+  byte ccwFace = CW_FROM_FACE(crawlyHeadFace, 5);
+  byte cwFace2 = CW_FROM_FACE(crawlyHeadFace, 2);
+  byte ccwFace2 = CW_FROM_FACE(crawlyHeadFace, 4);
+  byte forwardFace = crawlyDir ? ccwFace : cwFace;
+  bool canMoveForward = !(faceStates[forwardFace].flags & FaceFlag_NeighborPresent);
+  byte backFace = crawlyDir ? cwFace : ccwFace;
+  bool canMoveBackward = !(faceStates[backFace].flags & FaceFlag_NeighborPresent);
+
+  byte nextFace = CRAWLY_INVALID_FACE;
+  if (!(faceStates[crawlyHeadFace].flags & FaceFlag_NeighborPresent))
+  {
+    // No tile next to us, just keep crawling crawling
+    nextFace = forwardFace;
+  }
+  else if (canMoveForward)
+  {
+    nextFace = forwardFace;
+  }
+  else if (canMoveBackward)
+  {
+    // Turn around!
+    nextFace = backFace;
+    crawlyDir = (CrawlDir) ~crawlyDir;
+  }
+  else
+  {
+    //...stay put I guess?
+  }
+
+  // Move! Also kick off a transfer attempt if the destination allows it.
+  if (nextFace != CRAWLY_INVALID_FACE)
+  {
+    moveCrawlyToFace(nextFace);
+
+    // Only time crawly has a choice of where to go is at a narrow entrance
+    // Either she can transfer to the other tile or continue across the gap within the same tile
+    forwardFace = crawlyDir ? ccwFace2 : cwFace2;
+    canMoveForward = !(faceStates[forwardFace].flags & FaceFlag_NeighborPresent);
+    if (!canMoveForward || (millis() & 0x1))
+    {
+      // If the destination has a neighbor, try to transfer to it
+      if (faceStates[crawlyHeadFace].flags & FaceFlag_NeighborPresent)
+      {
+        // Try to transfer to the neighbor tile
+        crawlyTransferAttempted = true;
+        crawlyTransferAccepted = false;
+        enqueueCommOnFace(crawlyHeadFace, Command_TransferCrawly, crawlyDir | (crawlyRateScale << 1));
+      }
+    }
+  }
+}
+
+void moveCrawlyToFace(byte face)
+{
+  crawlyFadeFace = crawlyTailFace;
+  crawlyTailFace = crawlyHeadFace;
+  crawlyHeadFace = face;
+}
+
+// -------------------------------------------------------------------------------------------------
+
+void trySpawnCritter()
+{
+  // Each tile can only spawn one critter
+  if (tileFlags & TileFlag_SpawnedCritter)
+  {
+    return;
+  }
+
+  // Can only spawn a critter when there is a flower
+  if (!plantHasFlower)
+  {
+    return;
+  }
+
+  // Check if we already have a critter
+  if (tileFlags & (TileFlag_HasBug | TileFlag_HasFish | TileFlag_HasCrawly))
+  {
+    return;
+  }
+
+  // When under water, spawn a fish
+  // Otherwise spawn a bug or crawly
+  if (tileFlags & TileFlag_Submerged)
+  {
+    tileFlags |= TileFlag_HasFish;
+  }
+  else if (numNeighbors >= 5)
+  {
+    tileFlags |= TileFlag_HasBug;
+  }
+  else
+  {
+    tileFlags |= TileFlag_HasCrawly;
+    crawlyDir = (CrawlDir) (millis() & 0x1);
+    crawlyHeadFace = crawlySpawnFace;
+    crawlyRateScale = 0;
+  }
+
+  tileFlags |= TileFlag_SpawnedCritter;
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1780,12 +2407,21 @@ void accumulateWater()
     // Dirt stores water
     if ((tileFlags & TileFlag_HasDirt) && (f >= 2) && (f <= 4))
     {
+#ifndef ENABLE_DIRT_RESERVOIR
       if (faceState->waterStored < MAX_WATER_LEVEL)
       {
         byte waterToStore = MIN(faceState->waterLevel, MAX_WATER_LEVEL - faceState->waterStored);
         faceState->waterStored += waterToStore;
         faceState->waterLevel -= waterToStore;
       }
+#else
+      if (reservoir < MAX_WATER_LEVEL)
+      {
+        byte waterToStore = MIN(faceState->waterLevel, MAX_WATER_LEVEL - reservoir);
+        reservoir += waterToStore;
+        faceState->waterLevel -= waterToStore;
+      }
+#endif
     }
 
     // Now check if we need to toggle our "full" flag
@@ -1824,22 +2460,36 @@ void evaporateWater()
   }
   evaporationTimer.set(EVAPORATION_RATE);
   
-  byte amountToEvaporate = 1;
   FOREACH_FACE(f)
   {
+#ifndef ENABLE_DIRT_RESERVOIR
     byte *waterToEvaporate = &faceStates[f].waterLevel;
-
+    
     // Dirt faces evaporate from the stored amount
     if ((tileFlags & TileFlag_HasDirt) && (f >= 2) && (f <= 4))
     {
       waterToEvaporate = &faceStates[f].waterStored;
     }
-    
+
     if (*waterToEvaporate > 0)
     {
-      *waterToEvaporate -= amountToEvaporate;
+      *waterToEvaporate -= 1;
     }
+#else
+    if (faceStates[f].waterLevel > 0)
+    {
+      faceStates[f].waterLevel--;
+    }
+#endif
   }
+
+#ifdef ENABLE_DIRT_RESERVOIR
+  // Dirt faces evaporate from the stored amount
+  if (reservoir > 0)
+  {
+    reservoir--;
+  }
+#endif
 }
 
 // =================================================================================================
@@ -1848,14 +2498,23 @@ void evaporateWater()
 //
 // =================================================================================================
 
+#ifndef NEW_RENDER
+Color makeColorFromByte(ColorByte colorByte)
+{
+  return makeColorRGB(colorByte.r << 5, colorByte.g << 5, colorByte.b << 6);
+}
+#endif
+
 void render()
 {
+#ifndef NEW_RENDER
   Color color;
 
-  setColor(color);
+  setColor(OFF);
 
   // WATER
-  color = makeColorRGB(RGB_WATER);
+//  color = makeColorRGB(RGB_WATER);
+  color.as_uint16 = U16_WATER;
   FOREACH_FACE(f)
   {
     if (faceStates[f].waterLevel > 0)
@@ -1864,14 +2523,17 @@ void render()
     }
   }
 
+  // DIRT
   if (tileFlags & TileFlag_HasDirt)
   {
-    color = makeColorRGB(RGB_DIRT);
+//    color = makeColorRGB(RGB_DIRT);
+    color.as_uint16 = U16_DIRT;
     SET_COLOR_ON_FACE(color, 2);
     SET_COLOR_ON_FACE(color, 4);
     if (tileFlags & TileFlag_DirtIsFertile)
     {
-      color = makeColorRGB(RGB_DIRT_FERTILE);
+//      color = makeColorRGB(RGB_DIRT_FERTILE);
+      color.as_uint16 = U16_FERTILE;
     }
     SET_COLOR_ON_FACE(color, 3);
    }
@@ -1879,27 +2541,19 @@ void render()
   // PLANTS
   if (plantType != PlantType_None && !plantIsInResetState)
   {
-#if INCLUDE_FLORA
     PlantStateNode *plantStateNode = &plantParams[plantType].stateGraph[plantStateNodeIndex];
-#else
-    PlantStateNode *plantStateNode = &plantStateGraphTree[plantStateNodeIndex];
-#endif  
     int lutBits = plantRenderLUTIndexes[plantStateNode->faceRenderIndex];
     byte targetFace = plantRootFace;
 
     plantNumLeaves = 0;
-  
+    plantHasFlower = false;
     for(uint8_t f = 0; f <= 4 ; ++f) // one short because face 5 isn't used
     {
       // Face 1 is also not used
       if (f == 1)
       {
         // Take this opportunity to adjust the target face based on potential gravity influence
-#if INCLUDE_FLORA
         targetFace = CW_FROM_FACE(targetFace, plantExitFaceOffset + 1);
-#else
-        targetFace = CW_FROM_FACE(targetFace, 1);
-#endif
         continue;
       }
       
@@ -1908,13 +2562,10 @@ void render()
       {
         switch (lutIndex)
         {
-#if INCLUDE_FLORA
-          case PlantFaceType_Leaf:   plantNumLeaves++;   color = makeColorRGB(plantParams[plantType].leafColorR<<5, plantParams[plantType].leafColorG<<5, plantParams[plantType].leafColorB<<6);   break;
-#else
-          case PlantFaceType_Leaf:   plantNumLeaves++;   color = makeColorRGB(RGB_LEAF);   break;
-#endif
-          case PlantFaceType_Branch:                     color = makeColorRGB(RGB_BRANCH); break;
-          case PlantFaceType_Flower: plantNumLeaves++;   color = makeColorRGB(RGB_FLOWER); trySpawnBug(); break;
+          case PlantFaceType_Leaf:   plantNumLeaves++;   color = makeColorFromByte(plantParams[plantType].leafColor);   break;
+          case PlantFaceType_Branch:                     color.as_uint16 = U16_BRANCH; break;// = makeColorRGB(RGB_BRANCH); break;
+          case PlantFaceType_Flower: plantNumLeaves++;   color = tileFlags & TileFlag_SpawnedCritter ? makeColorRGB(RGB_FLOWER_USED) : makeColorRGB(RGB_FLOWER); plantHasFlower = true; break;
+//          case PlantFaceType_Flower: plantNumLeaves++;   color.as_uint16 = tileFlags & TileFlag_SpawnedCritter ? U16_FLOWER_USED : U16_FLOWER; plantHasFlower = true; break;
         }
         SET_COLOR_ON_FACE(color, targetFace);
       }
@@ -1926,18 +2577,190 @@ void render()
   // BUG
   if (tileFlags & TileFlag_HasBug)
   {
-    color = makeColorRGB(RGB_BUG);
+//    color = makeColorRGB(RGB_BUG);
+    color.as_uint16 = U16_BUG;
     SET_COLOR_ON_FACE(color, CW_FROM_FACE(bugTargetCorner, bugFlapOpen ? 0 : 1));
     SET_COLOR_ON_FACE(color, CW_FROM_FACE(bugTargetCorner, bugFlapOpen ? 5 : 4));
   }
 
+  // FISH
+  if (!fishTailTimer.isExpired())
+  {
+    color = makeColorFromByte(fishColors[fishTailColorIndex]);
+    SET_COLOR_ON_FACE(color, gravityUpFace);
+  }
+  if ((tileFlags & TileFlag_HasFish) &&
+      fishChosenMovementInfo != null)
+  {
+    color = makeColorFromByte(fishColors[fishInfo.colorIndex]);
+    #if 0
+    byte *colors = fishFacesToColor[fishInfo.topFace];
+    SET_COLOR_ON_FACE(color, gravityRelativeFace[colors[0]]);
+    SET_COLOR_ON_FACE(color, gravityRelativeFace[colors[1]]);
+    #else
+    byte fishTopActual = (byte) fishInfo.topFace;
+    fishTopActual = (fishTopActual << 1) | 0x1;    // convert enum to 1, 3, or 5
+    fishTopActual = gravityRelativeFace[fishTopActual];
+    SET_COLOR_ON_FACE(color, fishTopActual);
+    if (fishInfo.topFace == FishTopFace_Face1)
+    {
+      SET_COLOR_ON_FACE(color, gravityRelativeFace[2]);
+    }
+    else if (fishInfo.topFace == FishTopFace_Face5)
+    {
+      SET_COLOR_ON_FACE(color, gravityRelativeFace[4]);
+    }
+    #endif
+  }
+
+  // CRAWLY
+  if (tileFlags & TileFlag_HasCrawly && crawlyTransferDelay < 2)
+  {
+//    color = makeColorRGB(RGB_CRAWLY);
+    color.as_uint16 = U16_CRAWLY;
+    if (crawlyHeadFace != CRAWLY_INVALID_FACE)
+    {
+      SET_COLOR_ON_FACE(color, crawlyHeadFace);
+    }
+    if (crawlyTailFace != CRAWLY_INVALID_FACE)
+    {
+      SET_COLOR_ON_FACE(color, crawlyTailFace);
+    }
+    if (crawlyFadeFace != CRAWLY_INVALID_FACE)
+    {
+      SET_COLOR_ON_FACE(color, crawlyFadeFace);
+    }
+  }
+
+  // DRIPPER
   if (tileFlags & TileFlag_HasDripper)
   {
     // Dripper is always on face 0
-    color = makeColorRGB(RGB_DRIPPER);
+//    color = makeColorRGB(RGB_DRIPPER);
+    color.as_uint16 = U16_DRIPPER;
     SET_COLOR_ON_FACE(color, 0);
   }
+
+#else
+  uint16_t faceColorsU16[FACE_COUNT];
+
+  FOREACH_FACE(f)
+  {
+    faceColorsU16[f] = 0;
+  }
   
+  // WATER
+  FOREACH_FACE(f)
+  {
+    if (faceStates[f].waterLevel > 0)
+    {
+      faceColorsU16[f] = U16_WATER;
+    }
+  }
+
+  // DIRT
+  if (tileFlags & TileFlag_HasDirt)
+  {
+    faceColorsU16[2] = U16_DIRT;
+    faceColorsU16[3] = (tileFlags & TileFlag_DirtIsFertile) ? U16_FERTILE : U16_DIRT;
+    faceColorsU16[4] = U16_DIRT;
+   }
+
+  // PLANTS
+  if (plantType != PlantType_None && !plantIsInResetState)
+  {
+    PlantStateNode *plantStateNode = &plantParams[plantType].stateGraph[plantStateNodeIndex];
+    int lutBits = plantRenderLUTIndexes[plantStateNode->faceRenderIndex];
+    byte targetFace = plantRootFace;
+
+    plantNumLeaves = 0;
+    plantHasFlower = false;
+    for(uint8_t f = 0; f <= 4 ; ++f) // one short because face 5 isn't used
+    {
+      // Face 1 is also not used
+      if (f == 1)
+      {
+        // Take this opportunity to adjust the target face based on potential gravity influence
+        targetFace = CW_FROM_FACE(targetFace, plantExitFaceOffset + 1);
+        continue;
+      }
+      
+      byte lutIndex = lutBits & 0x3;
+      if (lutIndex != PlantFaceType_None)
+      {
+        switch (lutIndex)
+        {
+          case PlantFaceType_Leaf:   plantNumLeaves++;   faceColorsU16[targetFace] = U16_LEAF;   break;
+          case PlantFaceType_Branch:                     faceColorsU16[targetFace] = U16_BRANCH; break;
+          case PlantFaceType_Flower: plantNumLeaves++;   faceColorsU16[targetFace] = U16_FLOWER; plantHasFlower = true; break;
+        }
+        //SET_COLOR_ON_FACE(color, targetFace);
+      }
+      lutBits >>= 2;
+      targetFace = CW_FROM_FACE(targetFace, 1);
+    }
+  }
+
+  // BUG
+  if (tileFlags & TileFlag_HasBug)
+  {
+    faceColorsU16[CW_FROM_FACE(bugTargetCorner, bugFlapOpen ? 0 : 1)] = U16_BUG;
+    faceColorsU16[CW_FROM_FACE(bugTargetCorner, bugFlapOpen ? 5 : 4)] = U16_BUG;
+  }
+
+  // FISH
+  if (!fishTailTimer.isExpired())
+  {
+    faceColorsU16[gravityUpFace] = U16_FISH;
+  }
+  if ((tileFlags & TileFlag_HasFish) &&
+      fishChosenMovementInfo != null)
+  {
+    #if 0
+    byte *colors = fishFacesToColor[fishInfo.topFace];
+    SET_COLOR_ON_FACE(color, gravityRelativeFace[colors[0]]);
+    SET_COLOR_ON_FACE(color, gravityRelativeFace[colors[1]]);
+    #else
+    byte fishTopActual = (byte) fishInfo.topFace;
+    fishTopActual = (fishTopActual << 1) | 0x1;    // convert enum to 1, 3, or 5
+    fishTopActual = gravityRelativeFace[fishTopActual];
+    faceColorsU16[fishTopActual] = U16_FISH;
+    if (fishInfo.topFace == FishTopFace_Face1)
+    {
+      faceColorsU16[gravityRelativeFace[2]] = U16_FISH;
+    }
+    else if (fishInfo.topFace == FishTopFace_Face5)
+    {
+      faceColorsU16[gravityRelativeFace[4]] = U16_FISH;
+    }
+    #endif
+  }
+
+  // CRAWLY
+  if (tileFlags & TileFlag_HasCrawly && crawlyTransferDelay < 2)
+  {
+    if (crawlyHeadFace != CRAWLY_INVALID_FACE)
+    {
+      faceColorsU16[crawlyHeadFace] = U16_CRAWLY;
+    }
+    if (crawlyTailFace != CRAWLY_INVALID_FACE)
+    {
+      faceColorsU16[crawlyHeadFace] = U16_CRAWLY;
+    }
+    if (crawlyFadeFace != CRAWLY_INVALID_FACE)
+    {
+      faceColorsU16[crawlyHeadFace] = U16_CRAWLY;
+    }
+  }
+
+  // DRIPPER
+  if (tileFlags & TileFlag_HasDripper)
+  {
+    // Dripper is always on face 0
+    faceColorsU16[0] = U16_DRIPPER;
+  }
+#endif
+
 #if DEBUG_COLORS
   // Debug to show gravity
   setColorOnFace(WHITE, gravityUpFace);
@@ -1972,9 +2795,40 @@ void render()
   // Debug output overrides eveeeerything
   FOREACH_FACE(f)
   {
+    color.as_uint16 = U16_DEBUG;
     if (faceStates[f].flags & FaceFlag_Debug)
     {
-      setColorOnFace(makeColorRGB(255,128,64), f);
+#ifndef NEW_RENDER
+      setColorOnFace(color, f);
+#else
+    faceColorsU16[f] = U16_DEBUG;
+#endif
     }
   }
+
+#ifdef NEW_RENDER
+  FOREACH_FACE(f)
+  {
+    setColorOnFace3(faceColorsU16[f], f);
+  }
+#endif
 }
+
+/*
+
+2020-Sep-18
+* Add fish critter type
+* Add crawly critter type
+* Critter now spawns when tile with flower is clicked
+* Code space optimizations
+* 'Slope' plant type renamed to 'Dangle' for whatever reason idk
+  - Remove 'child branch grew' feature of plants :(
+  - Rework dirt reservoir - smaller AND works better :)
+  - Disable datagrams in blinklib
+  - Set 'as_uint16' color field directly instead of calling makeColorRGB() duh
+  - Expand comm payload size to use all 8 bits of the face value
+  - New data-centric method for CW_FROM_FACE, CCW_FROM_FACE, and OPPOSITE_FACE
+  - ^^^ This also enables a new way to get faces relative to gravity
+  - Bug move algorithm smallified (tm)
+  
+*/
