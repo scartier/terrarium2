@@ -39,7 +39,7 @@ byte worstFrameTime = 0;
 
 #if USE_DATA_SPONGE
 #warning DATA SPONGE ENABLED
-byte sponge[81];
+byte sponge[53];
 // Aug 26 flora: 55-59
 // Aug 29 before plant state reduction: 22, (after) 48
 // Aug 30 after making plant parameter table: 21, 23
@@ -52,13 +52,14 @@ byte sponge[81];
 // Sep 13: Code optimizations (at expense of data): 132
 // Sep 15: Code optimizations (at expense of data): 46
 // Sep 16: Went back to packing water table data: 81
+// Sep 18: Before adding new plant types: 41, 53 (after optimizing plantExitFaceOffsetArray)
 #endif
 
 #define MAX(x,y) ((x) > (y) ? (x) : (y))
 #define MIN(x,y) ((x) < (y) ? (x) : (y))
 
 byte faceOffsetArray[] = { 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5 };
-unsigned long faceOffsetArrayLong[] = { 0x10543210, 0x21054321, 0x32105432, 0x43210543, 0x54321054, 0x05432105 };
+//unsigned long faceOffsetArrayLong[] = { 0x10543210, 0x21054321, 0x32105432, 0x43210543, 0x54321054, 0x05432105 };
 
 #define CCW_FROM_FACE CCW_FROM_FACE2
 #define CCW_FROM_FACE1(f, amt) (((f) - (amt)) + (((f) >= (amt)) ? 0 : 6))
@@ -529,23 +530,16 @@ struct PlantParams
 {
   PlantStateNode *stateGraph;
   uint16_t leafColor;
+  byte branchStageIndexes[4];   // for some reason, making this array 3 entries bloats code by 12 bytes
 };
 
 PlantParams plantParams[] =
 {
   // State graph              Leaf color
-  {  plantStateGraphTree,     RGB_TO_U16_WITH_DIM(  0, 255,   0)  },
-  {  plantStateGraphVine,     RGB_TO_U16_WITH_DIM(  0, 192,  64)  },
-  {  plantStateGraphSeaweed,  RGB_TO_U16_WITH_DIM(128, 160,   0)  },
-  {  plantStateGraphDangle,   RGB_TO_U16_WITH_DIM(160,  64,   0)  },
-};
-
-byte plantBranchStageIndexes[][4] =
-{
-  { 0, 2, 7, 12 },
-  { 0, 1, 3, 0 },
-  { 0, 1, 4, 7 },
-  { 0, 2, 6, 9 },
+  {  plantStateGraphTree,     RGB_TO_U16_WITH_DIM(  0, 255,   0),  { 0, 2, 7, 12 },  },
+  {  plantStateGraphVine,     RGB_TO_U16_WITH_DIM(  0, 192,  64),  { 0, 1, 3, 0 },  },
+  {  plantStateGraphSeaweed,  RGB_TO_U16_WITH_DIM(128, 160,   0),  { 0, 1, 4, 7 },  },
+  {  plantStateGraphDangle,   RGB_TO_U16_WITH_DIM(160,  64,   0),  { 0, 2, 6, 9 },  },
 };
 
 // Timer that controls how often a plant must pay its maintenance cost or else wither.
@@ -1347,7 +1341,7 @@ void processCommForFace(Command command, byte value, byte f)
       {
         plantBranchStage = value & 0x3;
         plantType = value >> 2;
-        plantStateNodeIndex = plantBranchStageIndexes[plantType][plantBranchStage];
+        plantStateNodeIndex = plantParams[plantType].branchStageIndexes[plantBranchStage];
         plantIsInResetState = true;
       }
       break;
@@ -1662,12 +1656,10 @@ void loopDirt()
 // PLANTS
 // -------------------------------------------------------------------------------------------------
 
-char plantExitFaceOffsetArray[PlantType_MAX][6] =
+char plantExitFaceOffsetArray[2][6] =
 {
-  {  0, -1, -1, 99,  1,  1 },   // tree
-  {  0, -1, -1, 99,  1,  1 },   // vine
-  { 99,  1,  1,  0, -1, -1 },   // seaweed
-  {  0, -1, -1, 99,  1,  1 },   // Dangle
+  {  0, -1, -1, 99,  1,  1 },   // bend downward
+  { 99,  1,  1,  0, -1, -1 },   // bend upward
 };
 
 void loopPlantMaintain()
@@ -1702,7 +1694,8 @@ void loopPlantMaintain()
   if (plantStateNode->exitFace == PlantExitFace_AcrossOffset)
   {
 #ifdef OPTIMIZE // [OPTIMIZE] saves 24 bytes - consumes 24 bytes of data
-    plantExitFaceOffset = plantExitFaceOffsetArray[plantType][rootRelativeToGravity];
+    byte upOrDown = (plantType == PlantType_Seaweed) ? 1 : 0;
+    plantExitFaceOffset = plantExitFaceOffsetArray[upOrDown][rootRelativeToGravity];
     if (plantExitFaceOffset == 99)
     {
       plantExitFaceOffset = 0;
@@ -2636,6 +2629,10 @@ void render()
 }
 
 /*
+
+2020-Sep-18
+* Moved branch index array within PlantInfo struct at the expense of a couple code bytes
+* Optimized plantExitFaceOffsetArray to save 12 data bytes at the expense of a few code bytes
 
 2020-Sep-18
 * Experimented with different rand algorithms. Added millis8() alternative to millis() that returns an 8-bit value. Saves 6 bytes <shrug>
