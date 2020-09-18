@@ -79,6 +79,12 @@ unsigned long faceOffsetArrayLong[] = { 0x10543210, 0x21054321, 0x32105432, 0x43
 //#define SET_COLOR_ON_FACE(c,f) faceColors[f] = c
 //#define SET_COLOR_ON_FACE(c,f) setColorOnFace3(c.as_uint16, f)
 
+//byte randVal = 0xCC;
+#define RANDOM_BYTE() RANDOM_BYTE3
+#define RANDOM_BYTE1 millis()
+#define RANDOM_BYTE2 randVal
+#define RANDOM_BYTE3 millis8()
+
 // =================================================================================================
 //
 // COLORS
@@ -957,6 +963,9 @@ void loop()
   }
 #endif
 
+  //randVal = (randVal << 1) ^ millis8();
+  //randVal = millis8();
+
   // Detect button clicks
   handleUserInput();
 
@@ -1046,7 +1055,7 @@ void handleUserInput()
       {
         tileFlags |= TileFlag_HasFish;
         fishInfo.topFace = FishTopFace_Face5;
-        fishInfo.colorIndex = millis() & 0x7;
+        fishInfo.colorIndex = RANDOM_BYTE() & 0x7;
       }
     }
 #endif
@@ -1780,23 +1789,23 @@ void loopPlantMaintain()
   plantEnergy -= maintainCost;
 }
 
-PlantType plantTypeSelection[6] =
+PlantType plantTypeSelection[6][2] =
 {
-  PlantType_Tree,
-  PlantType_Dangle,
-  PlantType_Vine,
-  PlantType_Vine,
-  PlantType_Vine,
-  PlantType_Dangle,
+  { PlantType_Tree,     PlantType_Tree },
+  { PlantType_Dangle,   PlantType_Dangle },
+  { PlantType_Vine,     PlantType_Vine },
+  { PlantType_Vine,     PlantType_Vine },
+  { PlantType_Vine,     PlantType_Vine },
+  { PlantType_Dangle,   PlantType_Dangle },
 };
-PlantType plantTypeSelectionSubmerged[6] =
+PlantType plantTypeSelectionSubmerged[6][2] =
 {
-  PlantType_Seaweed,
-  PlantType_Seaweed,
-  PlantType_None,
-  PlantType_None,
-  PlantType_None,
-  PlantType_Seaweed,
+  { PlantType_Seaweed,  PlantType_Seaweed },
+  { PlantType_Seaweed,  PlantType_Seaweed },
+  { PlantType_None,     PlantType_None },
+  { PlantType_None,     PlantType_None },
+  { PlantType_None,     PlantType_None },
+  { PlantType_Seaweed,  PlantType_Seaweed },
 };
 
 void loopPlantGrow()
@@ -1825,31 +1834,8 @@ void loopPlantGrow()
     // Determine plant type by
     //   (1) tile orientation relative to gravity
     //   (2) being underwater
-#if 1 // saves 14 bytes - adds 12 data bytes, but makes it easier to add new plant types
-    plantType = (tileFlags & TileFlag_Submerged) ? plantTypeSelectionSubmerged[gravityUpFace] : plantTypeSelection[gravityUpFace];
-#else
-    if (gravityUpFace == 5 || gravityUpFace == 0 || gravityUpFace == 1)
-    {
-      // If submerged, grow seaweed
-      if (tileFlags & TileFlag_Submerged)
-      {
-        plantType = PlantType_Seaweed;
-      }
-      else if (gravityUpFace == 0)
-      {
-        // Trees grow straight up
-        plantType = PlantType_Tree;
-      }
-      else
-      {
-        plantType = PlantType_Dangle;
-      }
-    }
-    else
-    {
-      plantType = PlantType_Vine;
-    }
-#endif
+    byte randChoice = RANDOM_BYTE() & 0x1;
+    plantType = (tileFlags & TileFlag_Submerged) ? plantTypeSelectionSubmerged[gravityUpFace][randChoice] : plantTypeSelection[gravityUpFace][randChoice];
 
     if (plantType == PlantType_None)
     {
@@ -1927,7 +1913,7 @@ void loopPlantGrow()
           if (plantStateNode->growState2 != 0)
           {
             // Randomly choose between the two
-            if (millis() & 0x1)
+            if (RANDOM_BYTE() & 0x1)
             {
               stateOffset += plantStateNode->growState2;
             }
@@ -2058,7 +2044,7 @@ void loopBug()
       // Choose the other face if the first face isn't present
       // If both faces are present, then do a coin flip
       // Using the LSB of the time *should* be random enough for a coin flip
-      if (tryTransferToFace == -1 || millis() & 0x1)
+      if (tryTransferToFace == -1 || RANDOM_BYTE() & 0x1)
       {
         tryTransferToFace = otherFace;
         cwOffset = 0;
@@ -2077,7 +2063,7 @@ void loopBug()
 #endif
     bugDirection = 1;
     // Pick a different corner (50% opposite, 25% opposite-left, 25% opposite-right)
-    char offset = (millis() & 0x1) ? 3 : ((millis() & 0x2) ? 2 : 4);
+    char offset = (RANDOM_BYTE() & 0x1) ? 3 : ((RANDOM_BYTE() & 0x2) ? 2 : 4);
     bugTargetCorner = CW_FROM_FACE(bugTargetCorner, offset);
   }
 }
@@ -2171,7 +2157,7 @@ void loopFish()
   }
 
   // Pick the next move based on direction (left or right) and coin flip (up or down)
-  byte randUpOrDown = millis() & 0x1;
+  byte randUpOrDown = RANDOM_BYTE() & 0x1;
   if (!(tileFlags & TileFlag_Submerged))
   {
     // If this tile isn't full of water then force the fish to go down to try to find some
@@ -2298,7 +2284,7 @@ void loopCrawly()
     // Either she can transfer to the other tile or continue across the gap within the same tile
     forwardFace = crawlyDir ? ccwFace2 : cwFace2;
     canMoveForward = !(faceStates[forwardFace].flags & FaceFlag_NeighborPresent);
-    if (!canMoveForward || (millis() & 0x1))
+    if (!canMoveForward || (RANDOM_BYTE() & 0x1))
     {
       // If the destination has a neighbor, try to transfer to it
       if (faceStates[crawlyHeadFace].flags & FaceFlag_NeighborPresent)
@@ -2354,7 +2340,7 @@ void trySpawnCritter()
   else
   {
     tileFlags |= TileFlag_HasCrawly;
-    crawlyDir = (CrawlDir) (millis() & 0x1);
+    crawlyDir = (CrawlDir) (RANDOM_BYTE() & 0x1);
     crawlyHeadFace = crawlySpawnFace;
     crawlyRateScale = 0;
   }
@@ -2650,6 +2636,14 @@ void render()
 }
 
 /*
+
+2020-Sep-18
+* Experimented with different rand algorithms. Added millis8() alternative to millis() that returns an 8-bit value. Saves 6 bytes <shrug>
+* Allow random plant selection between two choices
+
+2020-Sep-18
+* Remove experimental and unused NEW_RENDER code
+* Change fish & plant color code to use uint16_t, which removed need for makeColorFromByte and shaved ~50 bytes
 
 2020-Sep-18
 * Add fish critter type
