@@ -22,7 +22,6 @@
 
 #define OPTIMIZE
 #define OLD_COMM_QUEUE    // testing new comm method
-//#define NEW_RENDER
 
 // Stuff to disable to get more code space
 #define DISABLE_CHILD_BRANCH_GREW     // disabling save 60 bytes
@@ -86,6 +85,8 @@ unsigned long faceOffsetArrayLong[] = { 0x10543210, 0x21054321, 0x32105432, 0x43
 //
 // =================================================================================================
 
+#define RGB_TO_U16_WITH_DIM(r,g,b) ((((uint16_t)r>>3>>DIM_COLORS) & 0x1F)<<1 | (((uint16_t)g>>3>>DIM_COLORS) & 0x1F)<<6 | (((uint16_t)b>>3>>DIM_COLORS) & 0x1F)<<11)
+
 #define RGB_DRIPPER       0>>DIM_COLORS,255>>DIM_COLORS,128>>DIM_COLORS
 #define RGB_DRIPPER_R     0
 #define RGB_DRIPPER_G     255
@@ -126,21 +127,11 @@ unsigned long faceOffsetArrayLong[] = { 0x10543210, 0x21054321, 0x32105432, 0x43
 #define RGB_FLOWER_USED_G 128
 #define RGB_FLOWER_USED_B 128
 
-#define RGB_FISH1   242>>5>>DIM_COLORS, 113>>5>>DIM_COLORS, 102>>6>>DIM_COLORS
-#define RGB_FISH2   255>>5>>DIM_COLORS, 133>>5>>DIM_COLORS,  33>>6>>DIM_COLORS
-#define RGB_FISH3   250>>5>>DIM_COLORS, 252>>5>>DIM_COLORS, 104>>6>>DIM_COLORS
-#define RGB_FISH4   181>>5>>DIM_COLORS, 255>>5>>DIM_COLORS,  33>>6>>DIM_COLORS
-#define RGB_FISH5    33>>5>>DIM_COLORS, 255>>5>>DIM_COLORS, 207>>6>>DIM_COLORS
-#define RGB_FISH6   200>>5>>DIM_COLORS, 104>>5>>DIM_COLORS, 252>>6>>DIM_COLORS
-#define RGB_FISH7    64>>5>>DIM_COLORS,  64>>5>>DIM_COLORS,  64>>6>>DIM_COLORS
-#define RGB_FISH8   200>>5>>DIM_COLORS, 200>>5>>DIM_COLORS, 200>>6>>DIM_COLORS
-
 #define RGB_CRAWLY 64>>DIM_COLORS,255>>DIM_COLORS,64>>DIM_COLORS
 #define RGB_CRAWLY_R      64
 #define RGB_CRAWLY_G      255
 #define RGB_CRAWLY_B      64
 
-#define RGB_TO_U16_WITH_DIM(r,g,b) (((r>>3>>DIM_COLORS) & 0x1F)<<1 | ((g>>3>>DIM_COLORS) & 0x1F)<<6 | ((b>>3>>DIM_COLORS) & 0x1F)<<11)
 #define U16_DRIPPER       RGB_TO_U16_WITH_DIM(RGB_DRIPPER_R,      RGB_DRIPPER_G,      RGB_DRIPPER_B     )
 #define U16_CRAWLY        RGB_TO_U16_WITH_DIM(RGB_CRAWLY_R,       RGB_CRAWLY_G,       RGB_CRAWLY_B      )
 #define U16_BUG           RGB_TO_U16_WITH_DIM(RGB_BUG_R,          RGB_BUG_G,          RGB_BUG_B         )
@@ -531,22 +522,16 @@ PlantStateNode plantStateGraphDangle[] =
 struct PlantParams
 {
   PlantStateNode *stateGraph;
-  ColorByte leafColor;
+  uint16_t leafColor;
 };
-
-#define TREE_BRANCH_NODE_INDEX 3
-#define RGB_LEAF           0>>5>>DIM_COLORS, 255>>5>>DIM_COLORS,  0>>6>>DIM_COLORS
-#define RGB_LEAF_VINE      0>>5>>DIM_COLORS, 192>>5>>DIM_COLORS, 64>>6>>DIM_COLORS
-#define RGB_LEAF_SEAWEED 128>>5>>DIM_COLORS, 160>>5>>DIM_COLORS,  0>>6>>DIM_COLORS
-#define RGB_LEAF_DANGLE  160>>5>>DIM_COLORS,  64>>5>>DIM_COLORS,  0>>6>>DIM_COLORS
 
 PlantParams plantParams[] =
 {
   // State graph              Leaf color
-  {  plantStateGraphTree,     RGB_LEAF,         },
-  {  plantStateGraphVine,     RGB_LEAF_VINE,    },
-  {  plantStateGraphSeaweed,  RGB_LEAF_SEAWEED, },
-  {  plantStateGraphDangle,   RGB_LEAF_DANGLE,  },
+  {  plantStateGraphTree,     RGB_TO_U16_WITH_DIM(  0, 255,   0)  },
+  {  plantStateGraphVine,     RGB_TO_U16_WITH_DIM(  0, 192,  64)  },
+  {  plantStateGraphSeaweed,  RGB_TO_U16_WITH_DIM(128, 160,   0)  },
+  {  plantStateGraphDangle,   RGB_TO_U16_WITH_DIM(160,  64,   0)  },
 };
 
 byte plantBranchStageIndexes[][4] =
@@ -634,16 +619,16 @@ bool fishTransferAccepted = false;
 
 byte fishTailColorIndex;
 
-ColorByte fishColors[] =
+uint16_t fishColors[] =
 {
-  RGB_FISH1,
-  RGB_FISH2,
-  RGB_FISH3,
-  RGB_FISH4,
-  RGB_FISH5,
-  RGB_FISH6,
-  RGB_FISH7,
-  RGB_FISH8,
+  RGB_TO_U16_WITH_DIM(242, 113, 102),
+  RGB_TO_U16_WITH_DIM(255, 133,  33),
+  RGB_TO_U16_WITH_DIM(250, 252, 104),
+  RGB_TO_U16_WITH_DIM(181, 255,  33),
+  RGB_TO_U16_WITH_DIM( 33, 255, 207),
+  RGB_TO_U16_WITH_DIM(200, 104, 252),
+  RGB_TO_U16_WITH_DIM( 64,  64,  64),
+  RGB_TO_U16_WITH_DIM(200, 200, 200),
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -2498,22 +2483,13 @@ void evaporateWater()
 //
 // =================================================================================================
 
-#ifndef NEW_RENDER
-Color makeColorFromByte(ColorByte colorByte)
-{
-  return makeColorRGB(colorByte.r << 5, colorByte.g << 5, colorByte.b << 6);
-}
-#endif
-
 void render()
 {
-#ifndef NEW_RENDER
   Color color;
 
   setColor(OFF);
 
   // WATER
-//  color = makeColorRGB(RGB_WATER);
   color.as_uint16 = U16_WATER;
   FOREACH_FACE(f)
   {
@@ -2526,13 +2502,11 @@ void render()
   // DIRT
   if (tileFlags & TileFlag_HasDirt)
   {
-//    color = makeColorRGB(RGB_DIRT);
     color.as_uint16 = U16_DIRT;
     SET_COLOR_ON_FACE(color, 2);
     SET_COLOR_ON_FACE(color, 4);
     if (tileFlags & TileFlag_DirtIsFertile)
     {
-//      color = makeColorRGB(RGB_DIRT_FERTILE);
       color.as_uint16 = U16_FERTILE;
     }
     SET_COLOR_ON_FACE(color, 3);
@@ -2547,6 +2521,7 @@ void render()
 
     plantNumLeaves = 0;
     plantHasFlower = false;
+    uint16_t flowerColor = tileFlags & TileFlag_SpawnedCritter ? U16_FLOWER_USED : U16_FLOWER;
     for(uint8_t f = 0; f <= 4 ; ++f) // one short because face 5 isn't used
     {
       // Face 1 is also not used
@@ -2562,10 +2537,9 @@ void render()
       {
         switch (lutIndex)
         {
-          case PlantFaceType_Leaf:   plantNumLeaves++;   color = makeColorFromByte(plantParams[plantType].leafColor);   break;
-          case PlantFaceType_Branch:                     color.as_uint16 = U16_BRANCH; break;// = makeColorRGB(RGB_BRANCH); break;
-          case PlantFaceType_Flower: plantNumLeaves++;   color = tileFlags & TileFlag_SpawnedCritter ? makeColorRGB(RGB_FLOWER_USED) : makeColorRGB(RGB_FLOWER); plantHasFlower = true; break;
-//          case PlantFaceType_Flower: plantNumLeaves++;   color.as_uint16 = tileFlags & TileFlag_SpawnedCritter ? U16_FLOWER_USED : U16_FLOWER; plantHasFlower = true; break;
+          case PlantFaceType_Leaf:   plantNumLeaves++;   color.as_uint16 = plantParams[plantType].leafColor;   break;
+          case PlantFaceType_Branch:                     color.as_uint16 = U16_BRANCH; break;
+          case PlantFaceType_Flower: plantNumLeaves++;   color.as_uint16 = flowerColor; plantHasFlower = true; break;
         }
         SET_COLOR_ON_FACE(color, targetFace);
       }
@@ -2577,7 +2551,6 @@ void render()
   // BUG
   if (tileFlags & TileFlag_HasBug)
   {
-//    color = makeColorRGB(RGB_BUG);
     color.as_uint16 = U16_BUG;
     SET_COLOR_ON_FACE(color, CW_FROM_FACE(bugTargetCorner, bugFlapOpen ? 0 : 1));
     SET_COLOR_ON_FACE(color, CW_FROM_FACE(bugTargetCorner, bugFlapOpen ? 5 : 4));
@@ -2586,18 +2559,13 @@ void render()
   // FISH
   if (!fishTailTimer.isExpired())
   {
-    color = makeColorFromByte(fishColors[fishTailColorIndex]);
+    color.as_uint16 = fishColors[fishTailColorIndex];
     SET_COLOR_ON_FACE(color, gravityUpFace);
   }
   if ((tileFlags & TileFlag_HasFish) &&
       fishChosenMovementInfo != null)
   {
-    color = makeColorFromByte(fishColors[fishInfo.colorIndex]);
-    #if 0
-    byte *colors = fishFacesToColor[fishInfo.topFace];
-    SET_COLOR_ON_FACE(color, gravityRelativeFace[colors[0]]);
-    SET_COLOR_ON_FACE(color, gravityRelativeFace[colors[1]]);
-    #else
+    color.as_uint16 = fishColors[fishInfo.colorIndex];
     byte fishTopActual = (byte) fishInfo.topFace;
     fishTopActual = (fishTopActual << 1) | 0x1;    // convert enum to 1, 3, or 5
     fishTopActual = gravityRelativeFace[fishTopActual];
@@ -2610,13 +2578,11 @@ void render()
     {
       SET_COLOR_ON_FACE(color, gravityRelativeFace[4]);
     }
-    #endif
   }
 
   // CRAWLY
   if (tileFlags & TileFlag_HasCrawly && crawlyTransferDelay < 2)
   {
-//    color = makeColorRGB(RGB_CRAWLY);
     color.as_uint16 = U16_CRAWLY;
     if (crawlyHeadFace != CRAWLY_INVALID_FACE)
     {
@@ -2636,130 +2602,9 @@ void render()
   if (tileFlags & TileFlag_HasDripper)
   {
     // Dripper is always on face 0
-//    color = makeColorRGB(RGB_DRIPPER);
     color.as_uint16 = U16_DRIPPER;
     SET_COLOR_ON_FACE(color, 0);
   }
-
-#else
-  uint16_t faceColorsU16[FACE_COUNT];
-
-  FOREACH_FACE(f)
-  {
-    faceColorsU16[f] = 0;
-  }
-  
-  // WATER
-  FOREACH_FACE(f)
-  {
-    if (faceStates[f].waterLevel > 0)
-    {
-      faceColorsU16[f] = U16_WATER;
-    }
-  }
-
-  // DIRT
-  if (tileFlags & TileFlag_HasDirt)
-  {
-    faceColorsU16[2] = U16_DIRT;
-    faceColorsU16[3] = (tileFlags & TileFlag_DirtIsFertile) ? U16_FERTILE : U16_DIRT;
-    faceColorsU16[4] = U16_DIRT;
-   }
-
-  // PLANTS
-  if (plantType != PlantType_None && !plantIsInResetState)
-  {
-    PlantStateNode *plantStateNode = &plantParams[plantType].stateGraph[plantStateNodeIndex];
-    int lutBits = plantRenderLUTIndexes[plantStateNode->faceRenderIndex];
-    byte targetFace = plantRootFace;
-
-    plantNumLeaves = 0;
-    plantHasFlower = false;
-    for(uint8_t f = 0; f <= 4 ; ++f) // one short because face 5 isn't used
-    {
-      // Face 1 is also not used
-      if (f == 1)
-      {
-        // Take this opportunity to adjust the target face based on potential gravity influence
-        targetFace = CW_FROM_FACE(targetFace, plantExitFaceOffset + 1);
-        continue;
-      }
-      
-      byte lutIndex = lutBits & 0x3;
-      if (lutIndex != PlantFaceType_None)
-      {
-        switch (lutIndex)
-        {
-          case PlantFaceType_Leaf:   plantNumLeaves++;   faceColorsU16[targetFace] = U16_LEAF;   break;
-          case PlantFaceType_Branch:                     faceColorsU16[targetFace] = U16_BRANCH; break;
-          case PlantFaceType_Flower: plantNumLeaves++;   faceColorsU16[targetFace] = U16_FLOWER; plantHasFlower = true; break;
-        }
-        //SET_COLOR_ON_FACE(color, targetFace);
-      }
-      lutBits >>= 2;
-      targetFace = CW_FROM_FACE(targetFace, 1);
-    }
-  }
-
-  // BUG
-  if (tileFlags & TileFlag_HasBug)
-  {
-    faceColorsU16[CW_FROM_FACE(bugTargetCorner, bugFlapOpen ? 0 : 1)] = U16_BUG;
-    faceColorsU16[CW_FROM_FACE(bugTargetCorner, bugFlapOpen ? 5 : 4)] = U16_BUG;
-  }
-
-  // FISH
-  if (!fishTailTimer.isExpired())
-  {
-    faceColorsU16[gravityUpFace] = U16_FISH;
-  }
-  if ((tileFlags & TileFlag_HasFish) &&
-      fishChosenMovementInfo != null)
-  {
-    #if 0
-    byte *colors = fishFacesToColor[fishInfo.topFace];
-    SET_COLOR_ON_FACE(color, gravityRelativeFace[colors[0]]);
-    SET_COLOR_ON_FACE(color, gravityRelativeFace[colors[1]]);
-    #else
-    byte fishTopActual = (byte) fishInfo.topFace;
-    fishTopActual = (fishTopActual << 1) | 0x1;    // convert enum to 1, 3, or 5
-    fishTopActual = gravityRelativeFace[fishTopActual];
-    faceColorsU16[fishTopActual] = U16_FISH;
-    if (fishInfo.topFace == FishTopFace_Face1)
-    {
-      faceColorsU16[gravityRelativeFace[2]] = U16_FISH;
-    }
-    else if (fishInfo.topFace == FishTopFace_Face5)
-    {
-      faceColorsU16[gravityRelativeFace[4]] = U16_FISH;
-    }
-    #endif
-  }
-
-  // CRAWLY
-  if (tileFlags & TileFlag_HasCrawly && crawlyTransferDelay < 2)
-  {
-    if (crawlyHeadFace != CRAWLY_INVALID_FACE)
-    {
-      faceColorsU16[crawlyHeadFace] = U16_CRAWLY;
-    }
-    if (crawlyTailFace != CRAWLY_INVALID_FACE)
-    {
-      faceColorsU16[crawlyHeadFace] = U16_CRAWLY;
-    }
-    if (crawlyFadeFace != CRAWLY_INVALID_FACE)
-    {
-      faceColorsU16[crawlyHeadFace] = U16_CRAWLY;
-    }
-  }
-
-  // DRIPPER
-  if (tileFlags & TileFlag_HasDripper)
-  {
-    // Dripper is always on face 0
-    faceColorsU16[0] = U16_DRIPPER;
-  }
-#endif
 
 #if DEBUG_COLORS
   // Debug to show gravity
@@ -2798,20 +2643,10 @@ void render()
     color.as_uint16 = U16_DEBUG;
     if (faceStates[f].flags & FaceFlag_Debug)
     {
-#ifndef NEW_RENDER
       setColorOnFace(color, f);
-#else
-    faceColorsU16[f] = U16_DEBUG;
-#endif
     }
   }
 
-#ifdef NEW_RENDER
-  FOREACH_FACE(f)
-  {
-    setColorOnFace3(faceColorsU16[f], f);
-  }
-#endif
 }
 
 /*
@@ -2820,8 +2655,9 @@ void render()
 * Add fish critter type
 * Add crawly critter type
 * Critter now spawns when tile with flower is clicked
-* Code space optimizations
 * 'Slope' plant type renamed to 'Dangle' for whatever reason idk
+* Parameterization of plant type determination for easier plant expansion
+* Code space optimizations
   - Remove 'child branch grew' feature of plants :(
   - Rework dirt reservoir - smaller AND works better :)
   - Disable datagrams in blinklib
@@ -2830,5 +2666,9 @@ void render()
   - New data-centric method for CW_FROM_FACE, CCW_FROM_FACE, and OPPOSITE_FACE
   - ^^^ This also enables a new way to get faces relative to gravity
   - Bug move algorithm smallified (tm)
+  - Remove use of blinklib::hasWoken()
+  - Smallified (tm) algorithm to detect submerged tiles
+  - Parameterize determination of plantExitFaceOffset (data vs. code tradeoff)
+  - Plant wither state smallification (c)
   
 */
