@@ -1,6 +1,10 @@
 // TERRARIUM
 // (c) 2020 Scott Cartier
 
+#ifndef BGA_CUSTOM_BLINKLIB
+#error "This code requires BGA's Custom Blinklib"
+#endif
+
 // TODO
 // * Make bug/fish/crawly die as necessary
 // * Proper random function
@@ -26,12 +30,7 @@
 
 // Stuff to disable to get more code space
 #define DISABLE_CHILD_BRANCH_GREW     // disabling save 60 bytes
-#define ENABLE_DIRT_RESERVOIR         // enabling saves 52 bytes
 //#define DISABLE_WATER_ADDED
-
-#ifndef BGA_CUSTOM_BLINKLIB
-#error "This code requires BGA's Custom Blinklib"
-#endif
 
 #if TRACK_FRAME_TIME
 unsigned long currentTime = 0;
@@ -41,7 +40,7 @@ byte worstFrameTime = 0;
 
 #if USE_DATA_SPONGE
 #warning DATA SPONGE ENABLED
-byte sponge[15];
+byte sponge[17];
 // Aug 26 flora: 55-59
 // Aug 29 before plant state reduction: 22, (after) 48
 // Aug 30 after making plant parameter table: 21, 23
@@ -56,6 +55,7 @@ byte sponge[15];
 // Sep 16: Went back to packing water table data: 81
 // Sep 18: Before adding new plant types: 41, 53 (after optimizing plantExitFaceOffsetArray)
 // Sep 18: Added mushroom plant type: 36, Added coral plant type: 15
+// Sep 20: Before data recovery: 17
 #endif
 
 #define MAX(x,y) ((x) > (y) ? (x) : (y))
@@ -156,13 +156,6 @@ byte faceOffsetArray[] = { 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5 };
 
 #define U16_DEBUG         RGB_TO_U16_WITH_DIM(255, 128, 64)
 
-struct ColorByte
-{
-  byte r : 3;
-  byte g : 3;
-  byte b : 2;
-};
-
 // =================================================================================================
 //
 // COMMUNICATIONS
@@ -249,12 +242,8 @@ struct FaceState
 
   // ---------------------------
   // Application-specific fields
-//  byte waterLevel;
 #ifndef DISABLE_WATER_ADDED
   byte waterAdded;
-#endif
-#ifndef ENABLE_DIRT_RESERVOIR
-  byte waterStored;   // dirt tiles hold on to water
 #endif
   // ---------------------------
 
@@ -266,8 +255,6 @@ struct FaceState
 FaceState faceStates[FACE_COUNT];
 
 byte waterLevels[FACE_COUNT];
-//#define WATER_LEVEL(f) faceStates[f].waterLevel
-#define WATER_LEVEL(f) waterLevels[f]
 
 #ifndef DISABLE_WATER_ADDED
 byte waterAdded[FACE_COUNT];
@@ -354,9 +341,7 @@ Timer plantEnergyTimer;
 #define PLANT_ENERGY_FROM_WATER 3
 #define PLANT_ENERGY_PER_SUN    1
 
-#ifdef ENABLE_DIRT_RESERVOIR
 byte reservoir;
-#endif
 
 // -------------------------------------------------------------------------------------------------
 // PLANT
@@ -1188,22 +1173,14 @@ void resetOurState()
   {
     FaceState *faceState = &faceStates[f];
 
-//    memclr(&faceState->waterLevel, 2);
-//    WATER_LEVEL(f) = 0;
 #ifndef DISABLE_WATER_ADDED
     WATER_ADDED(f) = 0;
-#endif
-    
-#ifndef ENABLE_DIRT_RESERVOIR
-    faceState->waterStored = 0;
 #endif
   }
 
   memclr(waterLevels, 6);
 
-#ifdef ENABLE_DIRT_RESERVOIR
   reservoir = 0;
-#endif
 
   resetPlantState();
   
@@ -1236,7 +1213,7 @@ void processCommForFace(Command command, byte value, byte f)
 #ifndef DISABLE_WATER_ADDED
       WATER_ADDED(f) += value;
 #else
-      WATER_LEVEL(f) += value;
+      waterLevels[f] += value;
 #endif
       
       // Clear our full flag since the neighbor clearly thinks we are not full
@@ -1448,7 +1425,7 @@ void loopDripper()
     return;
   }
 
-  WATER_LEVEL(0) += DRIPPER_AMOUNT;
+  waterLevels[0] += DRIPPER_AMOUNT;
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1528,7 +1505,7 @@ void loopWater()
     FaceState *faceStateSrc = &faceStates[srcFace];
     FaceState *faceStateDst = &faceStates[dstFace];
 
-    byte amountToSend = MIN(WATER_LEVEL(srcFace) >> command.halfWater, WATER_FLOW_AMOUNT);
+    byte amountToSend = MIN(waterLevels[srcFace] >> command.halfWater, WATER_FLOW_AMOUNT);
     if (amountToSend > 0)
     {
       if (command.srcFace == command.dstFace)
@@ -1540,7 +1517,7 @@ void loopWater()
           if (!(faceStateDst->flags & FaceFlag_NeighborWaterFull))
           {
             enqueueCommOnFace(dstFace, Command_AddWater, amountToSend);
-            WATER_LEVEL(srcFace) -= amountToSend;
+            waterLevels[srcFace] -= amountToSend;
           }
         }
       }
@@ -1549,9 +1526,9 @@ void loopWater()
 #ifndef DISABLE_WATER_ADDED
         WATER_ADDED(dstFace) += amountToSend;
 #else
-        WATER_LEVEL(dstFace) += amountToSend;
+        waterLevels[dstFace] += amountToSend;
 #endif
-        WATER_LEVEL(srcFace) -= amountToSend;
+        waterLevels[srcFace] -= amountToSend;
       }
     }
     else
@@ -1659,56 +1636,23 @@ void loopDirt()
     return;
   }
 
-#ifdef ENABLE_DIRT_RESERVOIR
   if (reservoir == 0)
   {
     return;
   }
-#else
-  byte *reservoir = &faceStates[3].waterStored;
-
-  // Suck water from the side dirt tiles to the center
-  if (*reservoir < MAX_WATER_LEVEL)
-  {
-    if (faceStates[2].waterStored > 0)
-    {
-      faceStates[2].waterStored--;
-      *reservoir += 1;
-    }
-    if (faceStates[4].waterStored > 0)
-    {
-      faceStates[4].waterStored--;
-      *reservoir += 1;
-    }
-  }
-
-  if (*reservoir == 0)
-  {
-    return;
-  }
-#endif
 
   // Energy generation formula:
   // Up to X water = X energy (so that a plant can sprout without needing sunlight)
   // After that Y water + Y sun = PLANT_ENERGY_PER_SUN*Y energy
 
   // X water
-#ifndef ENABLE_DIRT_RESERVOIR
-  byte energyToDistribute = (*reservoir > PLANT_ENERGY_FROM_WATER) ? PLANT_ENERGY_FROM_WATER : *reservoir;
-  *reservoir -= energyToDistribute;
-#else
   byte energyToDistribute = MIN(reservoir, PLANT_ENERGY_FROM_WATER);
   reservoir -= energyToDistribute;
-#endif
 
   // Y sun + Y water
-#ifndef ENABLE_DIRT_RESERVOIR
-  byte minWaterOrSun = MIN(*reservoir, gatheredSun);
-  *reservoir -= minWaterOrSun;
-#else
   byte minWaterOrSun = MIN(reservoir, gatheredSun);
   reservoir -= minWaterOrSun;
-#endif
+
   energyToDistribute += minWaterOrSun * PLANT_ENERGY_PER_SUN;
   gatheredSun = 0;
 
@@ -2465,35 +2409,26 @@ void accumulateWater()
 
     // Accumulate any water that flowed into us
 #ifndef DISABLE_WATER_ADDED
-    WATER_LEVEL(f) += WATER_ADDED(f);
+    waterLevels[f] += WATER_ADDED(f);
     WATER_ADDED(f) = 0;
 #endif
 
     // Dirt stores water
     if ((tileFlags & TileFlag_HasDirt) && (f >= 2) && (f <= 4))
     {
-#ifndef ENABLE_DIRT_RESERVOIR
-      if (faceState->waterStored < MAX_WATER_LEVEL)
-      {
-        byte waterToStore = MIN(WATER_LEVEL(f), MAX_WATER_LEVEL - faceState->waterStored);
-        faceState->waterStored += waterToStore;
-        WATER_LEVEL(f) -= waterToStore;
-      }
-#else
       if (reservoir < MAX_WATER_LEVEL)
       {
-        byte waterToStore = MIN(WATER_LEVEL(f), MAX_WATER_LEVEL - reservoir);
+        byte waterToStore = MIN(waterLevels[f], MAX_WATER_LEVEL - reservoir);
         reservoir += waterToStore;
-        WATER_LEVEL(f) -= waterToStore;
+        waterLevels[f] -= waterToStore;
       }
-#endif
     }
 
     // Now check if we need to toggle our "full" flag
     // If our full state changed, notify the neighbor
     if (faceState->flags & FaceFlag_WaterFull)
     {
-      if (WATER_LEVEL(f) < MAX_WATER_LEVEL)
+      if (waterLevels[f] < MAX_WATER_LEVEL)
       {
         // Was full, but now it's not
         faceState->flags &= ~FaceFlag_WaterFull;
@@ -2504,7 +2439,7 @@ void accumulateWater()
     }
     else
     {
-      if (WATER_LEVEL(f) >= MAX_WATER_LEVEL)
+      if (waterLevels[f] >= MAX_WATER_LEVEL)
       {
         // Wasn't full, but now it is
         faceState->flags |= FaceFlag_WaterFull;
@@ -2527,34 +2462,17 @@ void evaporateWater()
   
   FOREACH_FACE(f)
   {
-#ifndef ENABLE_DIRT_RESERVOIR
-    byte *waterToEvaporate = &WATER_LEVEL(f);
-    
-    // Dirt faces evaporate from the stored amount
-    if ((tileFlags & TileFlag_HasDirt) && (f >= 2) && (f <= 4))
+    if (waterLevels[f] > 0)
     {
-      waterToEvaporate = &faceStates[f].waterStored;
+      waterLevels[f]--;
     }
-
-    if (*waterToEvaporate > 0)
-    {
-      *waterToEvaporate -= 1;
-    }
-#else
-    if (WATER_LEVEL(f) > 0)
-    {
-      WATER_LEVEL(f)--;
-    }
-#endif
   }
 
-#ifdef ENABLE_DIRT_RESERVOIR
   // Dirt faces evaporate from the stored amount
   if (reservoir > 0)
   {
     reservoir--;
   }
-#endif
 }
 
 // =================================================================================================
@@ -2573,7 +2491,7 @@ void render()
   color.as_uint16 = U16_WATER;
   FOREACH_FACE(f)
   {
-    if (WATER_LEVEL(f) > 0)
+    if (waterLevels[f] > 0)
     {
       SET_COLOR_ON_FACE(color, f);
     }
@@ -2734,6 +2652,11 @@ void render()
 }
 
 /*
+
+2020-Sep-20
+* Cleanup: Remove ENABLE_DIRT_RESERVOIR define and make it permanent.
+* Cleanup: Remove unused ColorByte struct.
+* Cleanup: Remove old waterLevel within FaceState in favor of standalone array.
 
 2020-Sep-20
 * Moved waterLevel from the face struct to its own array. Saved a few bytes.
