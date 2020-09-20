@@ -4,6 +4,7 @@
 // TODO
 // * Make bug/fish/crawly die as necessary
 // * Proper random function
+// * Crawly speed up when hungry
 
 #define null 0
 #define DC 0      // don't care value
@@ -26,6 +27,7 @@
 // Stuff to disable to get more code space
 #define DISABLE_CHILD_BRANCH_GREW     // disabling save 60 bytes
 #define ENABLE_DIRT_RESERVOIR         // enabling saves 52 bytes
+//#define DISABLE_WATER_ADDED
 
 #ifndef BGA_CUSTOM_BLINKLIB
 #error "This code requires BGA's Custom Blinklib"
@@ -39,7 +41,7 @@ byte worstFrameTime = 0;
 
 #if USE_DATA_SPONGE
 #warning DATA SPONGE ENABLED
-byte sponge[53];
+byte sponge[15];
 // Aug 26 flora: 55-59
 // Aug 29 before plant state reduction: 22, (after) 48
 // Aug 30 after making plant parameter table: 21, 23
@@ -53,6 +55,7 @@ byte sponge[53];
 // Sep 15: Code optimizations (at expense of data): 46
 // Sep 16: Went back to packing water table data: 81
 // Sep 18: Before adding new plant types: 41, 53 (after optimizing plantExitFaceOffsetArray)
+// Sep 18: Added mushroom plant type: 36, Added coral plant type: 15
 #endif
 
 #define MAX(x,y) ((x) > (y) ? (x) : (y))
@@ -92,7 +95,7 @@ byte faceOffsetArray[] = { 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5 };
 //
 // =================================================================================================
 
-#define RGB_TO_U16_WITH_DIM(r,g,b) ((((uint16_t)r>>3>>DIM_COLORS) & 0x1F)<<1 | (((uint16_t)g>>3>>DIM_COLORS) & 0x1F)<<6 | (((uint16_t)b>>3>>DIM_COLORS) & 0x1F)<<11)
+#define RGB_TO_U16_WITH_DIM(r,g,b) ((((uint16_t)(r)>>3>>DIM_COLORS) & 0x1F)<<1 | (((uint16_t)(g)>>3>>DIM_COLORS) & 0x1F)<<6 | (((uint16_t)(b)>>3>>DIM_COLORS) & 0x1F)<<11)
 
 #define RGB_DRIPPER       0>>DIM_COLORS,255>>DIM_COLORS,128>>DIM_COLORS
 #define RGB_DRIPPER_R     0
@@ -246,8 +249,10 @@ struct FaceState
 
   // ---------------------------
   // Application-specific fields
-  byte waterLevel;
+//  byte waterLevel;
+#ifndef DISABLE_WATER_ADDED
   byte waterAdded;
+#endif
 #ifndef ENABLE_DIRT_RESERVOIR
   byte waterStored;   // dirt tiles hold on to water
 #endif
@@ -259,6 +264,16 @@ struct FaceState
 #endif
 };
 FaceState faceStates[FACE_COUNT];
+
+byte waterLevels[FACE_COUNT];
+//#define WATER_LEVEL(f) faceStates[f].waterLevel
+#define WATER_LEVEL(f) waterLevels[f]
+
+#ifndef DISABLE_WATER_ADDED
+byte waterAdded[FACE_COUNT];
+#define WATER_ADDED(f) faceStates[f].waterAdded
+//#define WATER_ADDED(f) waterAdded[f]
+#endif
 
 byte numNeighbors;
 
@@ -350,8 +365,10 @@ enum PlantType
 {
   PlantType_Tree,
   PlantType_Vine,
-  PlantType_Seaweed,
   PlantType_Dangle,
+  PlantType_Mushroom,
+  PlantType_Seaweed,
+  PlantType_Coral,
 
   PlantType_MAX,
   
@@ -420,6 +437,9 @@ byte plantRenderLUTIndexes[] =
 
   0b11010001,   // 19: BASE LEAF + CENTER LEAF + LEFT FLOWER
   0b00011101,   // 20: BASE LEAF + CENTER LEAF + RIGHT FLOWER
+
+  0b01010101,   // 21: BASE LEAF + THREE LEAVES
+  0b01010100,   // 22: THREE LEAVES
 };
 
 PlantStateNode plantStateGraphTree[] =
@@ -526,6 +546,34 @@ PlantStateNode plantStateGraphDangle[] =
   { 0, 0, 0,  0,   0,   DC,  PlantExitFace_None,         16 }, // BASE LEAF + CENTER FLOWER + SIDE LEAVES
 };
 
+PlantStateNode plantStateGraphMushroom[] =
+{
+// BASE
+//  G1 G2 W   WFG  AS,  UN,  EXITS                       R
+  { 0, 0, 0,  0,   1,   DC,  PlantExitFace_OneAcross,    13 }, // CENTER LEAF
+
+// STAGE 1 (TOP)
+//  G1 G2 W   WFG  AS,  UN,  EXITS                       R
+  { 1, 0, 1,  0,   0,   DC,  PlantExitFace_None,         1 }, // BASE LEAF
+  { 1, 0, 0,  0,   0,   DC,  PlantExitFace_None,         3 }, // BASE LEAF + CENTER LEAF
+  { 0, 0, 0,  0,   0,   DC,  PlantExitFace_None,         21 }, // BASE LEAF + THREE LEAVES
+};
+
+PlantStateNode plantStateGraphCoral[] =
+{
+// BASE
+//  G1 G2 W   WFG  AS,  UN,  EXITS                       R
+  { 1, 0, 1,  0,   0,   DC,  PlantExitFace_None,         13 }, // CENTER LEAF
+  { 0, 0, 0,  0,   1,   DC,  PlantExitFace_Fork,         22 }, // THREE LEAVES
+
+// STAGE 1
+//  G1 G2 W   WFG  AS,  UN,  EXITS                       R
+  { 1, 0, 1,  0,   0,   DC,  PlantExitFace_None,         1 }, // BASE LEAF
+  { 1, 1, 1,  0,   0,   DC,  PlantExitFace_None,         3 }, // BASE LEAF + CENTER LEAF
+  { 0, 0, 0,  0,   0,   DC,  PlantExitFace_AcrossOffset, 21 }, // BASE LEAF + THREE LEAVES
+  { 0, 0, 0,  0,   0,   DC,  PlantExitFace_Fork,         21 }, // BASE LEAF + THREE LEAVES
+};
+
 struct PlantParams
 {
   PlantStateNode *stateGraph;
@@ -537,9 +585,11 @@ PlantParams plantParams[] =
 {
   // State graph              Leaf color
   {  plantStateGraphTree,     RGB_TO_U16_WITH_DIM(  0, 255,   0),  { 0, 2, 7, 12 },  },
-  {  plantStateGraphVine,     RGB_TO_U16_WITH_DIM(  0, 192,  64),  { 0, 1, 3, 0 },  },
-  {  plantStateGraphSeaweed,  RGB_TO_U16_WITH_DIM(128, 160,   0),  { 0, 1, 4, 7 },  },
-  {  plantStateGraphDangle,   RGB_TO_U16_WITH_DIM(160,  64,   0),  { 0, 2, 6, 9 },  },
+  {  plantStateGraphVine,     RGB_TO_U16_WITH_DIM(  0, 192,  64),  { 0, 1, 3,  0 },  },
+  {  plantStateGraphDangle,   RGB_TO_U16_WITH_DIM(160,  64,   0),  { 0, 2, 6,  9 },  },
+  {  plantStateGraphMushroom, RGB_TO_U16_WITH_DIM( 64, 160,  32),  { 0, 1, 0,  0 },  },
+  {  plantStateGraphSeaweed,  RGB_TO_U16_WITH_DIM(128, 160,   0),  { 0, 1, 4,  7 },  },
+  {  plantStateGraphCoral,    RGB_TO_U16_WITH_DIM(160, 128,  64),  { 0, 2, 0,  0 },  },
 };
 
 // Timer that controls how often a plant must pay its maintenance cost or else wither.
@@ -631,10 +681,12 @@ uint16_t fishColors[] =
   RGB_TO_U16_WITH_DIM(200, 200, 200),
 };
 
+
 // -------------------------------------------------------------------------------------------------
 // CRAWLY
 //
 
+//#define CRAWLY_MOVE_RATE 400
 #define CRAWLY_MOVE_RATE 1000
 Timer crawlyMoveTimer;
 
@@ -654,7 +706,10 @@ bool crawlyTransferAttempted = false;
 bool crawlyTransferAccepted = false;
 char crawlyTransferDelay = 0;
 byte crawlySpawnFace;
-byte crawlyRateScale = 0;
+
+#define CRAWLY_HUNGRY_LEVEL 15
+#define CRAWLY_STARVED_LEVEL 28
+byte crawlyHunger = 0;
 
 // =================================================================================================
 //
@@ -1109,11 +1164,6 @@ void handleUserInput()
       tileFlags ^= TileFlag_DirtIsFertile;
     }
 
-    if (tileFlags & TileFlag_HasCrawly)
-    {
-      crawlyRateScale = crawlyRateScale ? 0 : 1;
-    }
-
     // Button clicks are also how we try to spawn critters from flowers
     trySpawnCritter();
   }
@@ -1138,12 +1188,18 @@ void resetOurState()
   {
     FaceState *faceState = &faceStates[f];
 
-    faceState->waterLevel = 0;
-    faceState->waterAdded = 0;
+//    memclr(&faceState->waterLevel, 2);
+//    WATER_LEVEL(f) = 0;
+#ifndef DISABLE_WATER_ADDED
+    WATER_ADDED(f) = 0;
+#endif
+    
 #ifndef ENABLE_DIRT_RESERVOIR
     faceState->waterStored = 0;
 #endif
   }
+
+  memclr(waterLevels, 6);
 
 #ifdef ENABLE_DIRT_RESERVOIR
   reservoir = 0;
@@ -1177,7 +1233,11 @@ void processCommForFace(Command command, byte value, byte f)
 
     // Water received from a neighbor
     case Command_AddWater:
-      faceState->waterAdded += value;
+#ifndef DISABLE_WATER_ADDED
+      WATER_ADDED(f) += value;
+#else
+      WATER_LEVEL(f) += value;
+#endif
       
       // Clear our full flag since the neighbor clearly thinks we are not full
       // If we are actually full then this will get set and we'll send another message to update the neighbor
@@ -1271,12 +1331,12 @@ void processCommForFace(Command command, byte value, byte f)
         enqueueCommOnFace(f, Command_Accepted, command);
 
         crawlyDir = (CrawlDir) (value & 0x1);
-        crawlyRateScale = value >> 1;
         crawlyHeadFace = f;
         crawlyTailFace = CRAWLY_INVALID_FACE;
-        //crawlyFadeFace = CRAWLY_INVALID_FACE;
+        crawlyFadeFace = CRAWLY_INVALID_FACE;
+        crawlyHunger = (value >> 1) + 1;
 
-        crawlyMoveTimer.set(CRAWLY_MOVE_RATE>>1);
+        crawlyMoveTimer.set(CRAWLY_MOVE_RATE);
         crawlyTransferDelay = 2;  // countdown: 2 = don't show, 1 = don't move
       }
       break;
@@ -1388,7 +1448,7 @@ void loopDripper()
     return;
   }
 
-  faceStates[0].waterLevel += DRIPPER_AMOUNT;
+  WATER_LEVEL(0) += DRIPPER_AMOUNT;
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1468,7 +1528,7 @@ void loopWater()
     FaceState *faceStateSrc = &faceStates[srcFace];
     FaceState *faceStateDst = &faceStates[dstFace];
 
-    byte amountToSend = MIN(faceStateSrc->waterLevel >> command.halfWater, WATER_FLOW_AMOUNT);
+    byte amountToSend = MIN(WATER_LEVEL(srcFace) >> command.halfWater, WATER_FLOW_AMOUNT);
     if (amountToSend > 0)
     {
       if (command.srcFace == command.dstFace)
@@ -1480,14 +1540,18 @@ void loopWater()
           if (!(faceStateDst->flags & FaceFlag_NeighborWaterFull))
           {
             enqueueCommOnFace(dstFace, Command_AddWater, amountToSend);
-            faceStateSrc->waterLevel -= amountToSend;
+            WATER_LEVEL(srcFace) -= amountToSend;
           }
         }
       }
       else if (!(faceStateDst->flags & FaceFlag_WaterFull))
       {
-        faceStateDst->waterAdded += amountToSend;
-        faceStateSrc->waterLevel -= amountToSend;
+#ifndef DISABLE_WATER_ADDED
+        WATER_ADDED(dstFace) += amountToSend;
+#else
+        WATER_LEVEL(dstFace) += amountToSend;
+#endif
+        WATER_LEVEL(srcFace) -= amountToSend;
       }
     }
     else
@@ -1666,16 +1730,31 @@ void loopPlantMaintain()
 {
   // Plants use energy periodically to stay alive and grow
 
+  if (plantType == PlantType_None)
+  {
+    return;
+  }
+
+  byte maintainCost = 1;
+
+  // If a critter is hungry and there's a plant then EAT IT
+  // Mimic this by forcing it to wither one step
+  // And we force it to wither by making its maintain cost super high
+  if (tileFlags & TileFlag_HasCrawly && crawlyHeadFace != CRAWLY_INVALID_FACE)
+  {
+    if (crawlyHunger >= CRAWLY_HUNGRY_LEVEL)
+    {
+      maintainCost = 99;
+      crawlyHunger = 0;
+      plantMaintainTimer.set(0);  // force immediate timer expiration
+    }
+  }
+
   if (!plantMaintainTimer.isExpired())
   {
     return;
   }
   plantMaintainTimer.set(PLANT_MAINTAIN_RATE);
-
-  if (plantType == PlantType_None)
-  {
-    return;
-  }
 
   PlantStateNode *plantStateNode = &plantParams[plantType].stateGraph[plantStateNodeIndex];
 
@@ -1694,7 +1773,7 @@ void loopPlantMaintain()
   if (plantStateNode->exitFace == PlantExitFace_AcrossOffset)
   {
 #ifdef OPTIMIZE // [OPTIMIZE] saves 24 bytes - consumes 24 bytes of data
-    byte upOrDown = (plantType == PlantType_Seaweed) ? 1 : 0;
+    byte upOrDown = (plantType >= PlantType_Seaweed) ? 1 : 0;
     plantExitFaceOffset = plantExitFaceOffsetArray[upOrDown][rootRelativeToGravity];
     if (plantExitFaceOffset == 99)
     {
@@ -1729,16 +1808,14 @@ void loopPlantMaintain()
 #endif
   }
 
-  // Only seaweed can live under water
   bool plantIsSubmerged = tileFlags & TileFlag_Submerged;
-  bool plantIsAquatic = plantType == PlantType_Seaweed;
+  bool plantIsAquatic = plantType >= PlantType_Seaweed;
   if (plantIsSubmerged != plantIsAquatic)
   {
     plantEnergy = 0;
   }
   
   // Use energy to maintain the current state
-  byte maintainCost = 1;
   if (plantEnergy < maintainCost)
   {
 #ifdef OPTIMIZE // [OPTIMIZE] saves 6 bytes
@@ -1785,20 +1862,20 @@ void loopPlantMaintain()
 PlantType plantTypeSelection[6][2] =
 {
   { PlantType_Tree,     PlantType_Tree },
-  { PlantType_Dangle,   PlantType_Dangle },
+  { PlantType_Dangle,   PlantType_Mushroom },
   { PlantType_Vine,     PlantType_Vine },
   { PlantType_Vine,     PlantType_Vine },
   { PlantType_Vine,     PlantType_Vine },
-  { PlantType_Dangle,   PlantType_Dangle },
+  { PlantType_Dangle,   PlantType_Mushroom },
 };
 PlantType plantTypeSelectionSubmerged[6][2] =
 {
   { PlantType_Seaweed,  PlantType_Seaweed },
-  { PlantType_Seaweed,  PlantType_Seaweed },
+  { PlantType_Seaweed,  PlantType_Coral },
+  { PlantType_None,     PlantType_Mushroom },
   { PlantType_None,     PlantType_None },
-  { PlantType_None,     PlantType_None },
-  { PlantType_None,     PlantType_None },
-  { PlantType_Seaweed,  PlantType_Seaweed },
+  { PlantType_None,     PlantType_Mushroom },
+  { PlantType_Seaweed,  PlantType_Coral },
 };
 
 void loopPlantGrow()
@@ -1980,6 +2057,7 @@ void resetPlantState()
 
   plantWitherState1 = 0;
   plantWitherState2 = 0;
+  plantHasFlower = false;
 
   // Allow a new critter to spawn
   tileFlags &= ~TileFlag_SpawnedCritter;
@@ -2195,7 +2273,29 @@ void loopCrawly()
   {
     return;
   }
-  crawlyMoveTimer.set(crawlyRateScale ? (CRAWLY_MOVE_RATE>>1) : CRAWLY_MOVE_RATE);
+  crawlyMoveTimer.set(CRAWLY_MOVE_RATE);
+
+  // Did crawly starve? :(
+  if (crawlyHunger == CRAWLY_STARVED_LEVEL)
+  {
+    tileFlags &= ~TileFlag_HasCrawly;
+  }
+  else if (crawlyHunger > CRAWLY_STARVED_LEVEL)
+  {
+    // NOTE : This is to cover an unexplained behavior seen while testing.
+    //
+    // If you attach a neighbor tile just as crawly is about to get to that face, sometimes crawly
+    // will glitch and, after the transfer, she will have a hunger of 30. I don't know why 30.
+    // This might be some fault in my communications code, BGA's custom blinklib IR handling (doubt 
+    // it), or even an error on the IR interface.
+    //
+    // The result of this glitch is that crawly was dying immediately upon transfer. Not great for
+    // the user. To fix this, I lowered her starvation threshold slightly and then detect when her 
+    // hunger has jumped higher than it can ever naturally get. I then reset her hunger back to zero.
+    //
+    // The user could use this instead to keep her alive instead of feeding her plants, but oh well.
+    crawlyHunger = 0;
+  }
 
   // First two loops after a transfer we don't want to move
   crawlyTransferDelay--;
@@ -2277,7 +2377,7 @@ void loopCrawly()
     // Either she can transfer to the other tile or continue across the gap within the same tile
     forwardFace = crawlyDir ? ccwFace2 : cwFace2;
     canMoveForward = !(faceStates[forwardFace].flags & FaceFlag_NeighborPresent);
-    if (!canMoveForward || (RANDOM_BYTE() & 0x1))
+    if (!canMoveForward || (RANDOM_BYTE() & 0x3))
     {
       // If the destination has a neighbor, try to transfer to it
       if (faceStates[crawlyHeadFace].flags & FaceFlag_NeighborPresent)
@@ -2285,7 +2385,7 @@ void loopCrawly()
         // Try to transfer to the neighbor tile
         crawlyTransferAttempted = true;
         crawlyTransferAccepted = false;
-        enqueueCommOnFace(crawlyHeadFace, Command_TransferCrawly, crawlyDir | (crawlyRateScale << 1));
+        enqueueCommOnFace(crawlyHeadFace, Command_TransferCrawly, crawlyDir | (crawlyHunger << 1));
       }
     }
   }
@@ -2333,9 +2433,8 @@ void trySpawnCritter()
   else
   {
     tileFlags |= TileFlag_HasCrawly;
-    crawlyDir = (CrawlDir) (RANDOM_BYTE() & 0x1);
     crawlyHeadFace = crawlySpawnFace;
-    crawlyRateScale = 0;
+    crawlyHunger = 0;
   }
 
   tileFlags |= TileFlag_SpawnedCritter;
@@ -2365,8 +2464,10 @@ void accumulateWater()
     FaceState *faceState = &faceStates[f];
 
     // Accumulate any water that flowed into us
-    faceState->waterLevel += faceState->waterAdded;
-    faceState->waterAdded = 0;
+#ifndef DISABLE_WATER_ADDED
+    WATER_LEVEL(f) += WATER_ADDED(f);
+    WATER_ADDED(f) = 0;
+#endif
 
     // Dirt stores water
     if ((tileFlags & TileFlag_HasDirt) && (f >= 2) && (f <= 4))
@@ -2374,16 +2475,16 @@ void accumulateWater()
 #ifndef ENABLE_DIRT_RESERVOIR
       if (faceState->waterStored < MAX_WATER_LEVEL)
       {
-        byte waterToStore = MIN(faceState->waterLevel, MAX_WATER_LEVEL - faceState->waterStored);
+        byte waterToStore = MIN(WATER_LEVEL(f), MAX_WATER_LEVEL - faceState->waterStored);
         faceState->waterStored += waterToStore;
-        faceState->waterLevel -= waterToStore;
+        WATER_LEVEL(f) -= waterToStore;
       }
 #else
       if (reservoir < MAX_WATER_LEVEL)
       {
-        byte waterToStore = MIN(faceState->waterLevel, MAX_WATER_LEVEL - reservoir);
+        byte waterToStore = MIN(WATER_LEVEL(f), MAX_WATER_LEVEL - reservoir);
         reservoir += waterToStore;
-        faceState->waterLevel -= waterToStore;
+        WATER_LEVEL(f) -= waterToStore;
       }
 #endif
     }
@@ -2392,7 +2493,7 @@ void accumulateWater()
     // If our full state changed, notify the neighbor
     if (faceState->flags & FaceFlag_WaterFull)
     {
-      if (faceState->waterLevel < MAX_WATER_LEVEL)
+      if (WATER_LEVEL(f) < MAX_WATER_LEVEL)
       {
         // Was full, but now it's not
         faceState->flags &= ~FaceFlag_WaterFull;
@@ -2403,7 +2504,7 @@ void accumulateWater()
     }
     else
     {
-      if (faceState->waterLevel >= MAX_WATER_LEVEL)
+      if (WATER_LEVEL(f) >= MAX_WATER_LEVEL)
       {
         // Wasn't full, but now it is
         faceState->flags |= FaceFlag_WaterFull;
@@ -2427,7 +2528,7 @@ void evaporateWater()
   FOREACH_FACE(f)
   {
 #ifndef ENABLE_DIRT_RESERVOIR
-    byte *waterToEvaporate = &faceStates[f].waterLevel;
+    byte *waterToEvaporate = &WATER_LEVEL(f);
     
     // Dirt faces evaporate from the stored amount
     if ((tileFlags & TileFlag_HasDirt) && (f >= 2) && (f <= 4))
@@ -2440,9 +2541,9 @@ void evaporateWater()
       *waterToEvaporate -= 1;
     }
 #else
-    if (faceStates[f].waterLevel > 0)
+    if (WATER_LEVEL(f) > 0)
     {
-      faceStates[f].waterLevel--;
+      WATER_LEVEL(f)--;
     }
 #endif
   }
@@ -2472,7 +2573,7 @@ void render()
   color.as_uint16 = U16_WATER;
   FOREACH_FACE(f)
   {
-    if (faceStates[f].waterLevel > 0)
+    if (WATER_LEVEL(f) > 0)
     {
       SET_COLOR_ON_FACE(color, f);
     }
@@ -2563,6 +2664,10 @@ void render()
   if (tileFlags & TileFlag_HasCrawly && crawlyTransferDelay < 2)
   {
     color.as_uint16 = U16_CRAWLY;
+    if (crawlyHunger > CRAWLY_HUNGRY_LEVEL)
+    {
+      color.as_uint16 = color.as_uint16 >> 1;
+    }
     if (crawlyHeadFace != CRAWLY_INVALID_FACE)
     {
       SET_COLOR_ON_FACE(color, crawlyHeadFace);
@@ -2629,6 +2734,15 @@ void render()
 }
 
 /*
+
+2020-Sep-20
+* Moved waterLevel from the face struct to its own array. Saved a few bytes.
+* Added two new plant types: mushroom & coral.
+* Allow plants to choose from two types when starting growth.
+* Add hunger level to crawly. She must eat a plant every now and then to survive.
+* Work around bug with crawly transferring to a newly-placed neighbor tile.
+* Remove ability to toggle crawly speed on click.
+* Make crawly less likely to crawl across a narrow gap.
 
 2020-Sep-18
 * Moved branch index array within PlantInfo struct at the expense of a couple code bytes
