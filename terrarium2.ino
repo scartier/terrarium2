@@ -5,41 +5,26 @@
 #error "This code requires BGA's Custom Blinklib"
 #endif
 
-// TODO
-// * Make bug/fish/crawly die as necessary
-// * Proper random function
-// * Crawly speed up when hungry
-
 #define null 0
 #define DC 0      // don't care value
 
 // Defines to enable debug code
-#define DEBUG_COMMS         0
-#define DETECT_COMM_ERRORS  0
 #define USE_DATA_SPONGE     0
-#define TRACK_FRAME_TIME    0
 //#define NO_STACK_WATCHER
 #define DEBUG_PLANT_ENERGY  0
 #define DEBUG_SPAWN_BUG     0
 #define DEBUG_SPAWN_FISH    0
 #define DEBUG_SPAWN_CRAWLY  0
 #define DIM_COLORS          0
+#define DEBUG_FACE_OUTPUT   0
 
-#define OPTIMIZE
 #define OLD_COMM_QUEUE    // testing new comm method
 
 // Stuff to disable to get more code space
 #define DISABLE_CHILD_BRANCH_GREW     // disabling save 60 bytes
-//#define DISABLE_WATER_ADDED
 
 // Stuff to turn off temporarily to get more code space to test things
 //#define DISABLE_PLANT_RENDERING
-
-#if TRACK_FRAME_TIME
-unsigned long currentTime = 0;
-byte frameTime;
-byte worstFrameTime = 0;
-#endif
 
 #if USE_DATA_SPONGE
 #warning DATA SPONGE ENABLED
@@ -54,21 +39,12 @@ byte sponge[43];
 // Sep 15: Code optimizations (at expense of data): 46
 // Sep 13: Code optimizations (at expense of data): 132
 // Sep 10: Latest BGA blinklib: 238?
-// Sep 10: 19(??)
-// Sep 8: Switch to data centric CW/CCW/OPPOSITE macros: 25
-// Sep 8: Remove empty start states for each plant branch stage: 37
-// Sep 7: Testing Bruno's blinklib: 2 (before), 14 (after)
-// Sep 2: after adding branch stages: 18
-// Aug 30 after making plant parameter table: 21, 23
-// Aug 29 before plant state reduction: 22, (after) 48
-// Aug 26 flora: 55-59
 #endif
 
 #define MAX(x,y) ((x) > (y) ? (x) : (y))
 #define MIN(x,y) ((x) < (y) ? (x) : (y))
 
 byte faceOffsetArray[] = { 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5 };
-//unsigned long faceOffsetArrayLong[] = { 0x10543210, 0x21054321, 0x32105432, 0x43210543, 0x54321054, 0x05432105 };
 
 #define CCW_FROM_FACE CCW_FROM_FACE2
 #define CCW_FROM_FACE1(f, amt) (((f) - (amt)) + (((f) >= (amt)) ? 0 : 6))
@@ -77,7 +53,6 @@ byte faceOffsetArray[] = { 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5 };
 #define CW_FROM_FACE CW_FROM_FACE2
 #define CW_FROM_FACE1(f, amt) (((f) + (amt)) % FACE_COUNT)
 #define CW_FROM_FACE2(f, amt) faceOffsetArray[(f) + (amt)]
-#define CW_FROM_FACE3(f, amt) ((faceOffsetArrayLong[f] >> (amt << 2)) & 0xF)
 
 #define OPPOSITE_FACE OPPOSITE_FACE2
 #define OPPOSITE_FACE1(f) (((f) < 3) ? ((f) + 3) : ((f) - 3))
@@ -89,7 +64,6 @@ byte faceOffsetArray[] = { 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5 };
 //#define SET_COLOR_ON_FACE(c,f) faceColors[f] = c
 //#define SET_COLOR_ON_FACE(c,f) setColorOnFace3(c.as_uint16, f)
 
-//byte randVal = 0xCC;
 #define RANDOM_BYTE() RANDOM_BYTE3
 #define RANDOM_BYTE1 millis()
 #define RANDOM_BYTE2 randVal
@@ -196,10 +170,6 @@ enum Command
   Command_TransferCrawly,   // Attempt to transfer a crawly from one tile to another (must be confirmed)
   Command_FishTail,         // Turn on the fish tail because the tile above us has a fish at the bottom
 
-#if DEBUG_COMMS
-  Command_UpdateState,
-#endif
-  
   Command_MAX
 };
 
@@ -222,13 +192,6 @@ CommandAndData commQueue[COMM_QUEUE_SIZE];
 byte commInsertionIndex;
 #endif
 
-#if DETECT_COMM_ERRORS
-#define COMM_INDEX_ERROR_OVERRUN 0xFF
-#define COMM_INDEX_OUT_OF_SYNC   0xFE
-#define COMM_DATA_OVERRUN        0xFD
-#define ErrorOnFace(f) (commInsertionIndexes[f] > COMM_QUEUE_SIZE)
-#endif
-
 enum FaceFlag
 {
   FaceFlag_NeighborPresent    = 1<<0,
@@ -247,32 +210,14 @@ struct FaceState
 
   // ---------------------------
   // Application-specific fields
-#ifndef DISABLE_WATER_ADDED
   byte waterAdded;
-#endif
   // ---------------------------
-
-#if DEBUG_COMMS
-  byte ourState;
-  byte neighborState;
-#endif
 };
 FaceState faceStates[FACE_COUNT];
 
 byte waterLevels[FACE_COUNT];
 
-#ifndef DISABLE_WATER_ADDED
-byte waterAdded[FACE_COUNT];
-#define WATER_ADDED(f) faceStates[f].waterAdded
-//#define WATER_ADDED(f) waterAdded[f]
-#endif
-
 byte numNeighbors;
-
-#if DEBUG_COMMS
-// Timer used to toggle between green & blue
-Timer sendNewStateTimer;
-#endif
 
 // =================================================================================================
 //
@@ -722,10 +667,6 @@ void setup()
   }
 #endif
 
-#if TRACK_FRAME_TIME
-  currentTime = millis();
-#endif
-  
   resetOurState();
   FOREACH_FACE(f)
   {
@@ -780,9 +721,6 @@ void enqueueCommOnFace(byte f, Command command, byte data)
   if (commInsertionIndexes[f] >= COMM_QUEUE_SIZE)
   {
     // Buffer overrun - might need to increase queue size to accommodate
-#if DETECT_COMM_ERRORS
-    commInsertionIndexes[f] = COMM_INDEX_ERROR_OVERRUN;
-#endif
     return;
   }
 #else
@@ -790,13 +728,6 @@ void enqueueCommOnFace(byte f, Command command, byte data)
   {
     // Outgoing queue is full - just drop the packet
     return;
-  }
-#endif
-
-#if DETECT_COMM_ERRORS
-  if (data & 0xF0)
-  {
-    commInsertionIndexes[f] = COMM_DATA_OVERRUN;
   }
 #endif
 
@@ -835,15 +766,6 @@ void updateCommOnFaces()
       crawlySpawnFace = f;
       continue;
     }
-
-#if DETECT_COMM_ERRORS
-    // If there is any kind of error on the face then do nothing
-    // The error can be reset by removing the neighbor
-    if (ErrorOnFace(f))
-    {
-      continue;
-    }
-#endif
 
     faceState->flags |= FaceFlag_NeighborPresent;
     numNeighbors++;
@@ -954,25 +876,10 @@ void updateCommOnFaces()
 #endif
 
         // Adjust the insertion index since we just shifted the queue
-#if DETECT_COMM_ERRORS
-        if (commInsertionIndexes[f] == 0)
-        {
-          // Shouldn't get here - if so something is funky
-          commInsertionIndexes[f] = COMM_INDEX_OUT_OF_SYNC;
-          continue;
-        }
-        else
-        {
-#endif
-
 #ifdef OLD_COMM_QUEUE
-          commInsertionIndexes[f]--;
+        commInsertionIndexes[f]--;
 #else
-          commInsertionIndex--;
-#endif
-
-#if DETECT_COMM_ERRORS
-        }
+        commInsertionIndex--;
 #endif
       }
     }
@@ -993,23 +900,6 @@ void updateCommOnFaces()
 
 void loop()
 {
-#if TRACK_FRAME_TIME
-  unsigned long previousTime = currentTime;
-  currentTime = millis();
-
-  // Clamp frame time at 255 ms to fit within a byte
-  // Hopefully processing doesn't ever take longer than that for one frame
-  unsigned long timeSinceLastLoop = currentTime - previousTime;
-  frameTime = (timeSinceLastLoop > 255) ? 255 : (timeSinceLastLoop & 0xFF);
-  if (frameTime > worstFrameTime)
-  {
-    worstFrameTime = frameTime;
-  }
-#endif
-
-  //randVal = (randVal << 1) ^ millis8();
-  //randVal = millis8();
-
   // Detect button clicks
   handleUserInput();
 
@@ -1018,19 +908,6 @@ void loop()
 
   // Update the helper array to translate logical to physical faces
   gravityRelativeFace = &faceOffsetArray[gravityUpFace];
-
-#if DEBUG_COMMS
-  if (sendNewStateTimer.isExpired())
-  {
-    FOREACH_FACE(f)
-    {
-      byte nextVal = faceStates[f].neighborState == 2 ? 3 : 2;
-      faceStates[f].neighborState = nextVal;
-      enqueueCommOnFace(f, Command_UpdateState, nextVal);
-    }
-    sendNewStateTimer.set(500);
-  }
-#else // DEBUG_COMMS
 
   // System loops
   loopDripper();
@@ -1045,8 +922,6 @@ void loop()
   // Update water levels and such
   postProcessState();
   
-#endif // DEBUG_COMMS
-
   // Set the colors on all faces according to what's happening in the tile
   render();
 }
@@ -1164,7 +1039,7 @@ void handleUserInput()
     }
   }
 
-  if (buttonSingleClicked())// && !hasWoken())
+  if (buttonSingleClicked() && !hasWoken())
   {
     // Adjust dripper speed
     if (tileFlags & TileFlag_HasDripper)
@@ -1207,21 +1082,12 @@ void resetOurState()
   FOREACH_FACE(f)
   {
     FaceState *faceState = &faceStates[f];
-
-#ifndef DISABLE_WATER_ADDED
-    WATER_ADDED(f) = 0;
-#endif
+    faceStates[f].waterAdded = 0;
   }
 
   memclr(waterLevels, 6);
-
   reservoir = 0;
-
   resetPlantState();
-  
-#if TRACK_FRAME_TIME
-  worstFrameTime = 0;
-#endif
 }
 
 void processCommForFace(Command command, byte value, byte f)
@@ -1245,11 +1111,7 @@ void processCommForFace(Command command, byte value, byte f)
 
     // Water received from a neighbor
     case Command_AddWater:
-#ifndef DISABLE_WATER_ADDED
-      WATER_ADDED(f) += value;
-#else
-      waterLevels[f] += value;
-#endif
+      faceStates[f].waterAdded += value;
       
       // Clear our full flag since the neighbor clearly thinks we are not full
       // If we are actually full then this will get set and we'll send another message to update the neighbor
@@ -1412,12 +1274,6 @@ void processCommForFace(Command command, byte value, byte f)
         plantIsInResetState = true;
       }
       break;
-      
-#if DEBUG_COMMS
-    case Command_UpdateState:
-      faceState->ourState = value;
-      break;
-#endif
   }
 }
 
@@ -1507,31 +1363,17 @@ void loopWater()
     return;
   }
 
-#ifdef OPTIMIZE
   // Assume the tile is submerged (has water in all six faces)
   // This flag will be cleared below if this isn't true
   tileFlags |= TileFlag_Submerged;
-#endif
 
   for (int waterFlowIndex = 0; waterFlowIndex < 16; waterFlowIndex++)
   {
     WaterFlowCommand command = waterFlowSequence[waterFlowIndex];
 
     // Get src/dst faces factoring in gravity direction
-#ifdef OPTIMIZE   // [OPTIMIZE] saves 10 bytes
     byte srcFace = gravityRelativeFace[command.srcFace];
     byte dstFace = gravityRelativeFace[command.dstFace];
-#else
-    byte srcFace = command.srcFace;
-    byte dstFace = command.dstFace;
-
-    // Factor in gravity direction
-    // Faces increase CW around the tile - need the CCW value to offset
-    byte gravityCCWAmount = 6 - gravityUpFace;
-    srcFace = CCW_FROM_FACE(srcFace, gravityCCWAmount);
-    dstFace = CCW_FROM_FACE(dstFace, gravityCCWAmount);
-#endif
-
     FaceState *faceStateSrc = &faceStates[srcFace];
     FaceState *faceStateDst = &faceStates[dstFace];
 
@@ -1553,36 +1395,16 @@ void loopWater()
       }
       else if (!(faceStateDst->flags & FaceFlag_WaterFull))
       {
-#ifndef DISABLE_WATER_ADDED
-        WATER_ADDED(dstFace) += amountToSend;
-#else
-        waterLevels[dstFace] += amountToSend;
-#endif
+        faceStates[dstFace].waterAdded += amountToSend;
         waterLevels[srcFace] -= amountToSend;
       }
     }
     else
     {
-#ifdef OPTIMIZE
       // No water in this face - tile isn't submerged
       tileFlags &= ~TileFlag_Submerged;
-#endif
     }
   }
-
-#ifndef OPTIMIZE // [OPTIMIZE] saves 68 bytes - sacrifices some accuracy - meh
-  // Determine if the tile is fully submerged (water in every face)
-  tileFlags &= ~TileFlag_Submerged;
-  if ((faceStates[0].waterLevel > 0) &&
-      (faceStates[1].waterLevel > 0) &&
-      (faceStates[2].waterLevel > 0) &&
-      (faceStates[3].waterLevel > 0) &&
-      (faceStates[4].waterLevel > 0) &&
-      (faceStates[5].waterLevel > 0))
-  {
-    tileFlags |= TileFlag_Submerged;
-  }
-#endif
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1618,25 +1440,17 @@ void propagateGravityDir()
   {
     enqueueCommOnFace(f, Command_GravityDir, cwFromUp);
 
-#ifdef OPTIMIZE   // [OPTIMIZE] saves 4 bytes
     cwFromUp--;
     if (cwFromUp < 0)
     {
       cwFromUp = 5;
     }
-#else
-    cwFromUp -= (cwFromUp > 0) ? 1 : -5;
-#endif
 
-#ifdef OPTIMIZE   // [OPTIMIZE] saves 2 bytes
     f++;
     if (f >= 6)
     {
       f = 0;
     }
-#else
-    f += (f < 5) ? 1 : -5;
-#endif
 
     // Done when we wrap around back to the start
   } while(f != gravityUpFace);
@@ -1746,7 +1560,6 @@ void loopPlantMaintain()
   plantExitFaceOffset = 0;
   if (plantStateNode->bend)
   {
-#ifdef OPTIMIZE // [OPTIMIZE] saves 24 bytes - consumes 24 bytes of data
     byte upOrDown = (plantType >= PlantType_Seaweed) ? 1 : 0;
     plantExitFaceOffset = plantExitFaceOffsetArray[upOrDown][rootRelativeToGravity];
     if (plantExitFaceOffset == 99)
@@ -1754,32 +1567,6 @@ void loopPlantMaintain()
       plantExitFaceOffset = 0;
       plantEnergy = 0;
     }
-#else
-    if (plantType == PlantType_Seaweed)
-    {
-      switch (rootRelativeToGravity)
-      {
-        case 0: plantEnergy = 0;          break;   // pointing directly down - cannnot grow
-        case 1:
-        case 2: plantExitFaceOffset = 1;  break;   // rotate CW by one face
-        case 3:                           break;   // pointing directly up - all's good
-        case 4:
-        case 5: plantExitFaceOffset = -1; break;   // rotate CCW by one face
-      }
-    }
-    else
-    {
-      switch (rootRelativeToGravity)
-      {
-        case 0:                           break;   // pointing directly down - all's good
-        case 1:
-        case 2: plantExitFaceOffset = -1; break;   // rotate CCW by one face
-        case 3: plantEnergy = 0;          break;   // pointing directly up - cannnot grow
-        case 4:
-        case 5: plantExitFaceOffset = 1;  break;   // rotate CW by one face
-      }
-     }
-#endif
   }
 
   bool plantIsSubmerged = tileFlags & TileFlag_Submerged;
@@ -1792,7 +1579,6 @@ void loopPlantMaintain()
   // Use energy to maintain the current state
   if (plantEnergy < maintainCost)
   {
-#ifdef OPTIMIZE // [OPTIMIZE] saves 6 bytes
     // Not enough energy - plant is dying
     // Wither plant
     plantStateNodeIndex = plantWitherState2;
@@ -1807,25 +1593,6 @@ void loopPlantMaintain()
         resetPlantState();
       }
     }
-#else
-    // Not enough energy - plant is dying
-    // Wither plant
-    if (plantWitherState2 > 0)
-    {
-      plantStateNodeIndex = plantWitherState2;
-      plantWitherState2 = 0;
-    }
-    else if (plantWitherState1 > 0)
-     {
-       plantStateNodeIndex = plantWitherState1;
-       plantWitherState1 = 0;
-    }
-    else
-    {
-      // Can't wither any further - just go away entirely
-      resetPlantState();
-    }
-#endif
     return;
   }
 
@@ -1988,58 +1755,24 @@ void loopPlantGrow()
   }
 
   // Pass on any unused energy
-  //if (plantStateNode->exitFaces != PlantExitFaces_None)
+  if (plantStateNode->halfEnergy)
   {
-    if (plantStateNode->halfEnergy)
+    energyForGrowth >>= 1;
+  }
+  
+  if (energyForGrowth > 0)
+  {
+    byte face = 2 + plantExitFaceOffset;
+    byte mask = 0x1;
+    do
     {
-      energyForGrowth >>= 1;
-    }
-    
-    if (energyForGrowth > 0)
-    {
-      byte face = 2 + plantExitFaceOffset;
-      byte mask = 0x1;
-      do
+      if (plantStateNode->exitFaces & mask)
       {
-        if (plantStateNode->exitFaces & mask)
-        {
-          sendEnergyToFace(face, energyForGrowth);
-        }
-        face++;
-        mask <<= 1;
-      } while (mask & 0x7);
-      /*
-      if (plantStateNode->exitFace & 0x1)
-      {
-        sendEnergyToFace(2 + plantExitFaceOffset, energyForGrowth);
+        sendEnergyToFace(face, energyForGrowth);
       }
-      if (plantStateNode->exitFace & 0x2)
-      {
-        sendEnergyToFace(3 + plantExitFaceOffset, energyForGrowth);
-      }
-      if (plantStateNode->exitFace & 0x4)
-      {
-        sendEnergyToFace(4 + plantExitFaceOffset, energyForGrowth);
-      }
-      */
-      /*
-      switch (plantStateNode->exitFace)
-      {
-        case PlantExitFace_OneAcross:
-          sendEnergyToFace(3, energyForGrowth);
-          break;
-          
-        case PlantExitFace_Fork:
-          sendEnergyToFace(2, energyForGrowth);
-          sendEnergyToFace(4, energyForGrowth);  // right branch gets the "round up" when odd
-          break;
-
-        case PlantExitFace_AcrossOffset:
-          sendEnergyToFace(3 + plantExitFaceOffset, energyForGrowth);
-          break;
-      }
-      */
-    }
+      face++;
+      mask <<= 1;
+    } while (mask & 0x7);
   }
 }
 
@@ -2090,17 +1823,10 @@ void loopBug()
   bugFlapOpen = !bugFlapOpen;
 
   // Move the bug along its path
-#if 1 // saves 6 bytes
   bugDistance += bugDirection;
-#else
-  bugDistance += (bugDirection > 0) ? BUG_MOVE_RATE : -BUG_MOVE_RATE;
-#endif
   if (bugDistance >= BUG_NUM_FLAPS)
   {
     // Start moving back towards the center
-#if 0 // saves 6 bytes - imperceptibly less accurate
-    bugDistance = 64;
-#endif
     bugDirection = -1;
     
     // While doing this, try to transfer to neighbor cell
@@ -2135,9 +1861,6 @@ void loopBug()
   }
   else if (bugDistance < 0)
   {
-#if 0 // saves 4 bytes - imperceptibly less accurate
-    bugDistance = 0;
-#endif
     bugDirection = 1;
     // Pick a different corner (50% opposite, 25% opposite-left, 25% opposite-right)
     char offset = (RANDOM_BYTE() & 0x1) ? 3 : ((RANDOM_BYTE() & 0x2) ? 2 : 4);
@@ -2472,10 +2195,8 @@ void accumulateWater()
     FaceState *faceState = &faceStates[f];
 
     // Accumulate any water that flowed into us
-#ifndef DISABLE_WATER_ADDED
-    waterLevels[f] += WATER_ADDED(f);
-    WATER_ADDED(f) = 0;
-#endif
+    waterLevels[f] += faceStates[f].waterAdded;
+    faceStates[f].waterAdded = 0;
 
     // Dirt stores water
     if ((tileFlags & TileFlag_HasDirt) && (f >= 2) && (f <= 4))
@@ -2674,11 +2395,6 @@ void render()
     SET_COLOR_ON_FACE(color, 0);
   }
 
-#if DEBUG_COLORS
-  // Debug to show gravity
-  setColorOnFace(WHITE, gravityUpFace);
-#endif
-
 #if DEBUG_PLANT_ENERGY
   if (tileFlags & TileFlag_ShowPlantEnergy)
   {
@@ -2705,6 +2421,7 @@ void render()
   }
 #endif
 
+#if DEBUG_FACE_OUTPUT
   // Debug output overrides eveeeerything
   FOREACH_FACE(f)
   {
@@ -2714,7 +2431,7 @@ void render()
       setColorOnFace(color, f);
     }
   }
-
+#endif
 }
 
 /*
@@ -2728,6 +2445,7 @@ void render()
 * Cut number of fish colors in half to four - saves some data bytes
 * Make crawly move slower when she's hungry
 * When a timer is set in more than once, created a non-inline helper function - saves some code space
+* Keep drippers from sending gravity immediately in case user is skipping past to dirt
 
 2020-Sep-20
 * Cleanup: Remove ENABLE_DIRT_RESERVOIR define and make it permanent.
