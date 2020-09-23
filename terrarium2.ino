@@ -21,14 +21,20 @@
 #define OLD_COMM_QUEUE    // testing new comm method
 
 // Stuff to disable to get more code space
-#define DISABLE_CHILD_BRANCH_GREW     // disabling save 60 bytes
+#define DISABLE_CHILD_BRANCH_GREW     // disabling saves 60 bytes
 
 // Stuff to turn off temporarily to get more code space to test things
 //#define DISABLE_PLANT_RENDERING
+//#define DISABLE_WATER_RENDERING
 
 #if USE_DATA_SPONGE
 #warning DATA SPONGE ENABLED
-byte sponge[43];
+byte sponge[14];
+// Sep 22: Fleshed out sea bush, reduced comm queue size to 3 each (yikes): 13
+// Sep 22: Added seventh plant type (sea bush): 7
+// Sep 22: Optimize plantExitFaceOffsetArray (+3), slight redesign of tree (+8): 31
+// Sep 21: Experimenting with new comm queue method: 39 (saves 19 bytes?)
+// Sep 21: After fixing plant rendering define: 20
 // Sep 21: Added back mushroom & coral plant type: 43
 // Sep 20: Reduce number of fish colors to 4, remove faceValueIn from faceStates: 63
 // Sep 20: After plant states reconstruction (removed mushroom & coral): 17
@@ -77,64 +83,17 @@ byte faceOffsetArray[] = { 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5 };
 
 #define RGB_TO_U16_WITH_DIM(r,g,b) ((((uint16_t)(r)>>3>>DIM_COLORS) & 0x1F)<<1 | (((uint16_t)(g)>>3>>DIM_COLORS) & 0x1F)<<6 | (((uint16_t)(b)>>3>>DIM_COLORS) & 0x1F)<<11)
 
-#define RGB_DRIPPER       0>>DIM_COLORS,255>>DIM_COLORS,128>>DIM_COLORS
-#define RGB_DRIPPER_R     0
-#define RGB_DRIPPER_G     255
-#define RGB_DRIPPER_B     128
+#define U16_DRIPPER       RGB_TO_U16_WITH_DIM(   0, 255, 128 )
+#define U16_CRAWLY        RGB_TO_U16_WITH_DIM( 128, 255,  64 )
+#define U16_BUG           RGB_TO_U16_WITH_DIM( 179, 255,   0 )
+#define U16_WATER         RGB_TO_U16_WITH_DIM(   0,   0,  96 )
+#define U16_DIRT          RGB_TO_U16_WITH_DIM( 128,  96,   0 )
+#define U16_FERTILE       RGB_TO_U16_WITH_DIM(  96, 128,   0 )
+#define U16_BRANCH        RGB_TO_U16_WITH_DIM( 191, 128,   0 )
+#define U16_FLOWER        RGB_TO_U16_WITH_DIM( 255, 192, 192 )
+#define U16_FLOWER_USED   RGB_TO_U16_WITH_DIM( 255, 128, 128 )
 
-#define RGB_DIRT          128>>DIM_COLORS,96>>DIM_COLORS,0
-#define RGB_DIRT_R        128
-#define RGB_DIRT_G        96
-#define RGB_DIRT_B        0
-
-#define RGB_DIRT_FERTILE  96>>DIM_COLORS,128>>DIM_COLORS,0
-#define RGB_FERTILE_R     96
-#define RGB_FERTILE_G     128
-#define RGB_FERTILE_B     0
-
-#define RGB_BUG           179>>DIM_COLORS,255>>DIM_COLORS,0
-#define RGB_BUG_R         179
-#define RGB_BUG_G         255
-#define RGB_BUG_B         0
-
-#define RGB_WATER         0,0,96>>DIM_COLORS
-#define RGB_WATER_R       0
-#define RGB_WATER_G       0
-#define RGB_WATER_B       96
-
-#define RGB_BRANCH        191>>DIM_COLORS,128>>DIM_COLORS,0
-#define RGB_BRANCH_R      191
-#define RGB_BRANCH_G      128
-#define RGB_BRANCH_B      0
-
-#define RGB_FLOWER        255>>DIM_COLORS,192>>DIM_COLORS,192>>DIM_COLORS
-#define RGB_FLOWER_R      255
-#define RGB_FLOWER_G      192
-#define RGB_FLOWER_B      192
-
-#define RGB_FLOWER_USED   255>>DIM_COLORS,128>>DIM_COLORS,128>>DIM_COLORS
-#define RGB_FLOWER_USED_R 255
-#define RGB_FLOWER_USED_G 128
-#define RGB_FLOWER_USED_B 128
-
-#define RGB_CRAWLY 64>>DIM_COLORS,255>>DIM_COLORS,64>>DIM_COLORS
-#define RGB_CRAWLY_R      128
-#define RGB_CRAWLY_G      255
-#define RGB_CRAWLY_B      64
-
-#define U16_DRIPPER       RGB_TO_U16_WITH_DIM(RGB_DRIPPER_R,      RGB_DRIPPER_G,      RGB_DRIPPER_B     )
-#define U16_CRAWLY        RGB_TO_U16_WITH_DIM(RGB_CRAWLY_R,       RGB_CRAWLY_G,       RGB_CRAWLY_B      )
-#define U16_BUG           RGB_TO_U16_WITH_DIM(RGB_BUG_R,          RGB_BUG_G,          RGB_BUG_B         )
-#define U16_WATER         RGB_TO_U16_WITH_DIM(RGB_WATER_R,        RGB_WATER_G,        RGB_WATER_B       )
-#define U16_DIRT          RGB_TO_U16_WITH_DIM(RGB_DIRT_R,         RGB_DIRT_G,         RGB_DIRT_B        )
-#define U16_FERTILE       RGB_TO_U16_WITH_DIM(RGB_FERTILE_R,      RGB_FERTILE_G,      RGB_FERTILE_B     )
-#define U16_BRANCH        RGB_TO_U16_WITH_DIM(RGB_BRANCH_R,       RGB_BRANCH_G,       RGB_BRANCH_B      )
-#define U16_LEAF          0x89AB
-#define U16_FLOWER        RGB_TO_U16_WITH_DIM(RGB_FLOWER_R,       RGB_FLOWER_G,       RGB_FLOWER_B      )
-#define U16_FLOWER_USED   RGB_TO_U16_WITH_DIM(RGB_FLOWER_USED_R,  RGB_FLOWER_USED_G,  RGB_FLOWER_USED_B )
-#define U16_FISH          0xABCD
-
-#define U16_DEBUG         RGB_TO_U16_WITH_DIM(255, 128, 64)
+#define U16_DEBUG         RGB_TO_U16_WITH_DIM( 255, 128,  64 )
 
 // =================================================================================================
 //
@@ -183,7 +142,7 @@ struct CommandAndData
 };
 
 #ifdef OLD_COMM_QUEUE
-#define COMM_QUEUE_SIZE 4
+#define COMM_QUEUE_SIZE 3
 CommandAndData commQueues[FACE_COUNT][COMM_QUEUE_SIZE];
 byte commInsertionIndexes[FACE_COUNT];
 #else
@@ -304,6 +263,7 @@ enum PlantType
   PlantType_Mushroom,
   PlantType_Seaweed,
   PlantType_Coral,
+  PlantType_SeaBush,
 
   PlantType_None = 7
 };
@@ -341,7 +301,7 @@ struct PlantStateNode
   byte halfEnergy         : 1;  // send half energy to child branches
 
   // Growth into neighbors
-  PlantExitFaces exitFaces  : 3;  // which of the three opposite faces can have a child branch
+  PlantExitFaces exitFaces: 3;  // which of the three opposite faces can have a child branch
 
   // Render info
   byte faceRenderIndex    : 5;
@@ -368,8 +328,8 @@ byte plantRenderLUTIndexes[] =
   0b01000110,   //  8: BASE BRANCH + FORK LEAVES
   0b10001010,   //  9: BASE BRANCH + FORK BRANCHES
   0b10011010,   // 10: BASE BRANCH + FORK BRANCHES + CENTER LEAF
-  0b00110010,   // 11: BASE BRANCH + FLOWER
-  0b01110110,   // 12: BASE BRANCH + FLOWER + SIDE LEAVES
+  0b00000101,   // 11: BASE LEAF + LEFT LEAF
+  0b01000001,   // 12: BASE LEAF + RIGHT LEAF
 
   0b00010000,   // 13: CENTER LEAF
   0b00100000,   // 14: CENTER BRANCH
@@ -377,8 +337,8 @@ byte plantRenderLUTIndexes[] =
   0b00110001,   // 15: BASE LEAF + CENTER FLOWER
   0b01110101,   // 16: BASE LEAF + CENTER FLOWER + SIDE LEAVES
 
-  0b01010001,   // 17: BASE LEAF + CENTER LEAF + LEFT LEAF (for debug mostly)
-  0b00010101,   // 18: BASE LEAF + CENTER LEAF + RIGHT LEAF (for debug mostly)
+  0b11000101,   // 17: BASE LEAF + LEFT LEAF + RIGHT FLOWER
+  0b01001101,   // 18: BASE LEAF + RIGHT LEAF + LEFT FLOWER
 
   0b11010001,   // 19: BASE LEAF + CENTER LEAF + LEFT FLOWER
   0b00011101,   // 20: BASE LEAF + CENTER LEAF + RIGHT FLOWER
@@ -388,6 +348,8 @@ byte plantRenderLUTIndexes[] =
 
   0b00010101,   // 23: BASE LEAF + CENTER & LEFT LEAVES
   0b01010001,   // 24: BASE LEAF + CENTER & RIGHT LEAVES
+
+  0b01000100,   // 25: SIDE LEAVES (NO BASE)
 };
 
 PlantStateNode plantStateGraphTree[] =
@@ -399,29 +361,25 @@ PlantStateNode plantStateGraphTree[] =
 
 // STAGE 1 (TRUNK)
 //  G1 G2 W   B    AS,  1/2,  EXITS                       R
-  { 1, 3, 1,  0,   0,   0,    PlantExitFaces_None,        1 }, // BASE LEAF (WITHER STATE) (CHOICE)
+  { 1, 3, 1,  0,   0,   0,    PlantExitFaces_None,        1 }, // BASE LEAF (Choice between trunk and fork)
   { 1, 0, 0,  0,   0,   0,    PlantExitFaces_Center,      4 }, // BASE BRANCH + CENTER LEAF
   { 1, 0, 1,  0,   0,   0,    PlantExitFaces_Center,      5 }, // BASE BRANCH + CENTER BRANCH
   { 0, 0, 0,  0,   0,   0,    PlantExitFaces_Center,      6 }, // BASE BRANCH + CENTER BRANCH + SIDE LEAVES
-  { 1, 0, 0,  0,   1,   0,    PlantExitFaces_Center,      4 }, // BASE BRANCH + CENTER LEAF (ADVANCE STAGE)
-  { 1, 0, 1,  0,   1,   0,    PlantExitFaces_Center,      5 }, // BASE BRANCH + CENTER BRANCH (ADVANCE STAGE)
-  { 0, 0, 0,  0,   0,   0,    PlantExitFaces_Center,      6 }, // BASE BRANCH + CENTER BRANCH + SIDE LEAVES (ADVANCE STAGE)
+  { 1, 0, 0,  0,   1,   1,    PlantExitFaces_LeftRight,   8 }, // BASE BRANCH + TWO LEAVES
+  { 1, 0, 1,  0,   1,   1,    PlantExitFaces_LeftRight,   9 }, // BASE BRANCH + TWO BRANCHES
+  { 0, 0, 0,  0,   1,   1,    PlantExitFaces_LeftRight,   10 }, // BASE BRANCH + TWO BRANCHES + CENTER LEAF
 
-// STAGE 2 (BRANCHES)
+// STAGE 2 (BENDY BRANCHES)
 //  G1 G2 W   B    AS,  1/2,  EXITS                       R
-  { 1, 3, 1,  0,   0,   0,    PlantExitFaces_None,        1 }, // BASE LEAF (WITHER STATE) (CHOICE)
-  { 1, 0, 0,  0,   0,   1,    PlantExitFaces_LeftRight,   8 }, // BASE BRANCH + TWO LEAVES
-  { 1, 0, 1,  0,   0,   1,    PlantExitFaces_LeftRight,   9 }, // BASE BRANCH + TWO BRANCHES
-  { 0, 0, 0,  0,   0,   1,    PlantExitFaces_LeftRight,   10 }, // BASE BRANCH + TWO BRANCHES + CENTER LEAF
-  { 1, 0, 0,  0,   1,   1,    PlantExitFaces_LeftRight,   8 }, // BASE BRANCH + TWO LEAVES (ADVANCE STAGE)
-  { 1, 0, 1,  0,   1,   1,    PlantExitFaces_LeftRight,   9 }, // BASE BRANCH + TWO BRANCHES (ADVANCE STAGE)
-  { 0, 0, 0,  0,   0,   1,    PlantExitFaces_LeftRight,   10 }, // BASE BRANCH + TWO BRANCHES + CENTER LEAF (ADVANCE STAGE)
+  { 1, 0, 1,  1,   0,   0,    PlantExitFaces_None,        1 }, // BASE LEAF
+  { 0, 0, 0,  1,   1,   1,    PlantExitFaces_LeftRight,   8 }, // BASE BRANCH + TWO LEAVES
 
-// STAGE 3 (FLOWERS)
+// STAGE 3 (DROOPY FLOWER)
 //  G1 G2 W   B    AS,  1/2,  EXITS                       R
-  { 1, 0, 1,  0,   0,   0,    PlantExitFaces_None,        1 }, // BASE LEAF (WITHER STATE)
-  { 1, 0, 1,  1,   0,   0,    PlantExitFaces_None,        11 }, // BASE BRANCH + FLOWER (WITHER STATE)
-  { 0, 0, 0,  1,   0,   0,    PlantExitFaces_None,        12 }, // BASE BRANCH + FLOWER + TWO LEAVES
+  { 1, 1, 1,  1,   0,   0,    PlantExitFaces_None,        1 }, // BASE LEAF
+  { 0, 0, 0,  1,   0,   0,    PlantExitFaces_Center,      3 }, // BASE LEAF + CENTER LEAF
+  { 1, 0, 1,  1,   0,   0,    PlantExitFaces_None,        15 }, // BASE LEAF + CENTER FLOWER
+  { 0, 0, 0,  1,   0,   0,    PlantExitFaces_None,        16 }, // BASE LEAF + CENTER FLOWER + SIDE LEAVES
 };
 
 PlantStateNode plantStateGraphVine[] =
@@ -520,6 +478,27 @@ PlantStateNode plantStateGraphCoral[] =
   { 0, 0, 0,  0,   0,   0,    PlantExitFaces_LeftRight,   21 }, // BASE LEAF + THREE LEAVES
 };
 
+PlantStateNode plantStateGraphSeaBush[] =
+{
+// BASE
+//  G1 G2 W   B    AS,  1/2,  EXITS                       R
+  { 1, 0, 1,  0,   1,   1,    PlantExitFaces_LeftRight,   25 }, // SIDE LEAVES
+  { 0, 0, 0,  0,   1,   1,    PlantExitFaces_LeftRight,   25 }, // SIDE LEAVES (doubled to withstand crawly)
+  
+// STAGE 1
+//  G1 G2 W   B    AS,  1/2,  EXITS                       R
+  { 1, 2, 1,  0,   0,   0,    PlantExitFaces_None,        1 }, // BASE LEAF (choice)
+  { 1, 3, 1,  0,   0,   0,    PlantExitFaces_Left,        11 }, // BASE LEAF + LEFT LEAF (choice)
+  { 0, 0, 0,  0,   0,   0,    PlantExitFaces_Left,        11 }, // BASE LEAF + LEFT LEAF (END)
+  { 1, 1, 1,  0,   0,   0,    PlantExitFaces_Right,       12 }, // BASE LEAF + RIGHT LEAF (choice)
+  { 0, 0, 0,  0,   0,   0,    PlantExitFaces_Right,       12 }, // BASE LEAF + RIGHT LEAF (END)
+  { 1, 1, 0,  0,   0,   1,    PlantExitFaces_LeftRight,   7 }, // BASE LEAF + BOTH LEAVES (choice)
+  { 0, 0, 0,  0,   0,   1,    PlantExitFaces_LeftRight,   7 }, // BASE LEAF + BOTH LEAVES (END)
+  { 1, 1, 0,  0,   0,   1,    PlantExitFaces_LeftRight,   7 }, // BASE LEAF + BOTH LEAVES (choice)
+  { 0, 0, 0,  0,   0,   1,    PlantExitFaces_LeftRight,   17 }, // BASE LEAF + LEFT LEAF + RIGHT FLOWER
+  { 0, 0, 0,  0,   0,   1,    PlantExitFaces_LeftRight,   18 }, // BASE LEAF + RIGHT LEAF + LEFT FLOWER
+};
+
 struct PlantParams
 {
   PlantStateNode *stateGraph;
@@ -530,12 +509,13 @@ struct PlantParams
 PlantParams plantParams[] =
 {
   // State graph              Leaf color
-  {  plantStateGraphTree,     RGB_TO_U16_WITH_DIM(  0, 255,   0),  { 2, 9, 16 },  },
+  {  plantStateGraphTree,     RGB_TO_U16_WITH_DIM(  0, 255,   0),  { 2, 9, 11 },  },
   {  plantStateGraphVine,     RGB_TO_U16_WITH_DIM(  0, 192,  64),  { 1, 0,  0 },  },
   {  plantStateGraphDangle,   RGB_TO_U16_WITH_DIM(160,  64,   0),  { 2, 6, 11 },  },
   {  plantStateGraphMushroom, RGB_TO_U16_WITH_DIM( 64, 160,  32),  { 1, 0,  0 },  },
   {  plantStateGraphSeaweed,  RGB_TO_U16_WITH_DIM(128, 160,   0),  { 1, 0,  0 },  },
   {  plantStateGraphCoral,    RGB_TO_U16_WITH_DIM(160, 128,  64),  { 2, 0,  0 },  },
+  {  plantStateGraphSeaBush,  RGB_TO_U16_WITH_DIM(  0, 192,  64),  { 2, 0,  0 },  },
 };
 
 // Timer that controls how often a plant must pay its maintenance cost or else wither.
@@ -938,6 +918,11 @@ void __attribute__((noinline)) setFishTailTimer()
   fishTailTimer.set(FISH_MOVE_RATE);
 }
 
+void __attribute__((noinline)) setFishMoveTimer()
+{
+  fishMoveTimer.set(FISH_MOVE_RATE);
+}
+
 void __attribute__((noinline)) setCrawlyMoveTimer()
 {
   crawlyMoveTimer.set((crawlyHunger >= CRAWLY_HUNGRY_LEVEL) ? CRAWLY_MOVE_RATE_HUNGRY : CRAWLY_MOVE_RATE);
@@ -1181,6 +1166,7 @@ void processCommForFace(Command command, byte value, byte f)
         // Transfer accepted
         tileFlags |= TileFlag_HasFish;
         fishInfo = *((FishInfo*) &value);
+        setFishMoveTimer();
         
         // Notify the sender
         enqueueCommOnFace(f, Command_Accepted, command);
@@ -1508,10 +1494,15 @@ void loopDirt()
 // PLANTS
 // -------------------------------------------------------------------------------------------------
 
-char plantExitFaceOffsetArray[2][6] =
+// This array is weird. It is used to tell how branches bend up or down depending on gravity.
+// There are two arrays overlapped here to save data space.
+// The first is {0,-1,-1,99,1,1} (starting at index 0) and is for downward bending plants (above water).
+// The second is {99,1,1,0,-1,-1} (starting at index 3) and is for upward bending plants (below water).
+#define PLANT_FACE_OFFSET_INDEX_DOWN  0
+#define PLANT_FACE_OFFSET_INDEX_UP    3
+char plantExitFaceOffsetArray[] =
 {
-  {  0, -1, -1, 99,  1,  1 },   // bend downward
-  { 99,  1,  1,  0, -1, -1 },   // bend upward
+  0, -1, -1, 99,  1,  1, 0, -1, -1,
 };
 
 void loopPlantMaintain()
@@ -1560,8 +1551,8 @@ void loopPlantMaintain()
   plantExitFaceOffset = 0;
   if (plantStateNode->bend)
   {
-    byte upOrDown = (plantType >= PlantType_Seaweed) ? 1 : 0;
-    plantExitFaceOffset = plantExitFaceOffsetArray[upOrDown][rootRelativeToGravity];
+    byte offsetArrayIndex = (plantType >= PlantType_Seaweed) ? PLANT_FACE_OFFSET_INDEX_UP : PLANT_FACE_OFFSET_INDEX_DOWN;
+    plantExitFaceOffset = plantExitFaceOffsetArray[offsetArrayIndex + rootRelativeToGravity];
     if (plantExitFaceOffset == 99)
     {
       plantExitFaceOffset = 0;
@@ -1613,9 +1604,9 @@ PlantType plantTypeSelectionSubmerged[6][2] =
 {
   { PlantType_Seaweed,  PlantType_Seaweed },
   { PlantType_Seaweed,  PlantType_Coral },
-  { PlantType_None,     PlantType_Mushroom },
-  { PlantType_None,     PlantType_None },
-  { PlantType_None,     PlantType_Mushroom },
+  { PlantType_SeaBush,  PlantType_Mushroom },
+  { PlantType_SeaBush,  PlantType_None },
+  { PlantType_SeaBush,  PlantType_Mushroom },
   { PlantType_Seaweed,  PlantType_Coral },
 };
 
@@ -1948,7 +1939,7 @@ void loopFish()
   }
 
   // Fish is still here - set up for the next move
-  fishMoveTimer.set(FISH_MOVE_RATE);
+  setFishMoveTimer();
 
   // If our tail pokes into a neighbor then tell that tile to show it
   if (fishInfo.topFace == FishTopFace_Face3)
@@ -2273,6 +2264,7 @@ void render()
   setColor(OFF);
 
   // WATER
+#ifndef DISABLE_WATER_RENDERING
   color.as_uint16 = U16_WATER;
   FOREACH_FACE(f)
   {
@@ -2281,6 +2273,7 @@ void render()
       SET_COLOR_ON_FACE(color, f);
     }
   }
+#endif
 
   // DIRT
   if (tileFlags & TileFlag_HasDirt)
@@ -2435,6 +2428,17 @@ void render()
 }
 
 /*
+
+2020-Sep-22
+* Reduce comm queue size to 3 entries per face to save 12 bytes
+* Add seventh plant type: Sea Bush
+* Fix bug with fish movement looking weird during transfers
+* Remove unused RGB defines
+* Changed tree plant type to have weeping branches
+* Optimize face offset array to save 3 bytes (such is my life now)
+
+2020-Sep-21
+* Remove a bunch of obsolete, commented out, or otherwise unused code.
 
 2020-Sep-21
 * Removed 'faceValueIn' from comm struct since it is not used outside where it is obtained - saves some data bytes
