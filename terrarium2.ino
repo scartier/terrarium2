@@ -26,10 +26,16 @@
 // Stuff to turn off temporarily to get more code space to test things
 //#define DISABLE_PLANT_RENDERING
 //#define DISABLE_WATER_RENDERING
+//#define DISABLE_DRIPPER_RENDERING
 
 #if USE_DATA_SPONGE
 #warning DATA SPONGE ENABLED
-byte sponge[14];
+byte sponge[29];
+// Sep 24: Move stage 2 & 3 indexes to separate array since only two plants use them: 29
+// Sep 24: Make base stage of all plant types 2 states to avoid storing it, remove middle state from stage 1 mushroom: 19
+// Sep 24: Create CrawlyInfo struct and remove crawlySpawnFace: 16
+// Sep 24: Remove unused plant render bytes: 13
+// Sep 23: Updated blinklib to 1.2.1: 11
 // Sep 22: Fleshed out sea bush, reduced comm queue size to 3 each (yikes): 13
 // Sep 22: Added seventh plant type (sea bush): 7
 // Sep 22: Optimize plantExitFaceOffsetArray (+3), slight redesign of tree (+8): 31
@@ -83,7 +89,9 @@ byte faceOffsetArray[] = { 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5 };
 
 #define RGB_TO_U16_WITH_DIM(r,g,b) ((((uint16_t)(r)>>3>>DIM_COLORS) & 0x1F)<<1 | (((uint16_t)(g)>>3>>DIM_COLORS) & 0x1F)<<6 | (((uint16_t)(b)>>3>>DIM_COLORS) & 0x1F)<<11)
 
-#define U16_DRIPPER       RGB_TO_U16_WITH_DIM(   0, 255, 128 )
+#define U16_DRIPPER0      RGB_TO_U16_WITH_DIM(   0, 128,  64 )
+#define U16_DRIPPER1      RGB_TO_U16_WITH_DIM(   0, 192,  96 )
+#define U16_DRIPPER2      RGB_TO_U16_WITH_DIM(   0, 255, 128 )
 #define U16_CRAWLY        RGB_TO_U16_WITH_DIM( 128, 255,  64 )
 #define U16_BUG           RGB_TO_U16_WITH_DIM( 179, 255,   0 )
 #define U16_WATER         RGB_TO_U16_WITH_DIM(   0,   0,  96 )
@@ -258,8 +266,8 @@ byte reservoir;
 enum PlantType
 {
   PlantType_Tree,
-  PlantType_Vine,
   PlantType_Dangle,
+  PlantType_Vine,
   PlantType_Mushroom,
   PlantType_Seaweed,
   PlantType_Coral,
@@ -317,9 +325,9 @@ enum PlantFaceType
 
 byte plantRenderLUTIndexes[] = 
 {//  4 3 2 0
-  0b00000000,   //  0: EMPTY
+  0b01000100,   //  0: SIDE LEAVES (NO BASE)
   0b00000001,   //  1: BASE LEAF
-  0b00000010,   //  2: BASE BRANCH
+  0b01010001,   //  2: BASE LEAF + CENTER & RIGHT LEAVES
   0b00010001,   //  3: BASE LEAF + CENTER LEAF
   0b00010010,   //  4: BASE BRANCH + CENTER LEAF
   0b00100010,   //  5: BASE BRANCH + CENTER BRANCH
@@ -347,9 +355,6 @@ byte plantRenderLUTIndexes[] =
   0b01010100,   // 22: THREE LEAVES
 
   0b00010101,   // 23: BASE LEAF + CENTER & LEFT LEAVES
-  0b01010001,   // 24: BASE LEAF + CENTER & RIGHT LEAVES
-
-  0b01000100,   // 25: SIDE LEAVES (NO BASE)
 };
 
 PlantStateNode plantStateGraphTree[] =
@@ -374,7 +379,7 @@ PlantStateNode plantStateGraphTree[] =
   { 1, 0, 1,  1,   0,   0,    PlantExitFaces_None,        1 }, // BASE LEAF
   { 0, 0, 0,  1,   1,   1,    PlantExitFaces_LeftRight,   8 }, // BASE BRANCH + TWO LEAVES
 
-// STAGE 3 (DROOPY FLOWER)
+// STAGE 3 (VINE or DROOPY FLOWER)
 //  G1 G2 W   B    AS,  1/2,  EXITS                       R
   { 1, 1, 1,  1,   0,   0,    PlantExitFaces_None,        1 }, // BASE LEAF
   { 0, 0, 0,  1,   0,   0,    PlantExitFaces_Center,      3 }, // BASE LEAF + CENTER LEAF
@@ -386,7 +391,8 @@ PlantStateNode plantStateGraphVine[] =
 {
 // BASE  
 //  G1 G2 W   B    AS,  1/2,  EXITS                       R
-  { 0, 0, 0,  0,   1,   0,    PlantExitFaces_Center,      13 }, // CENTER LEAF
+  { 1, 0, 1,  0,   1,   0,    PlantExitFaces_Center,      13 }, // CENTER LEAF
+  { 0, 0, 0,  0,   1,   0,    PlantExitFaces_Center,      13 }, // CENTER LEAF (doubled to withstand crawly)
 
 // STAGE 1 (NORMAL)
 //  G1 G2 W   B    AS,  1/2,  EXITS                       R
@@ -396,7 +402,7 @@ PlantStateNode plantStateGraphVine[] =
   { 1, 3, 0,  1,   0,   0,    PlantExitFaces_Center,      3 }, // BASE LEAF + CENTER LEAF (choice fork or flower)
   { 1, 1, 0,  1,   0,   0,    PlantExitFaces_Center,      3 }, // BASE LEAF + CENTER LEAF (choice fork side)
   { 0, 0, 0,  1,   0,   1,    PlantExitFaces_LeftCenter,  23 }, // BASE LEAF + CENTER LEAF + LEFT LEAF
-  { 0, 0, 0,  1,   0,   1,    PlantExitFaces_CenterRight, 24 }, // BASE LEAF + CENTER LEAF + RIGHT LEAF
+  { 0, 0, 0,  1,   0,   1,    PlantExitFaces_CenterRight, 2 }, // BASE LEAF + CENTER LEAF + RIGHT LEAF
   { 1, 1, 0,  1,   0,   0,    PlantExitFaces_Center,      3 }, // BASE LEAF + CENTER LEAF + LEFT LEAF (choice flower side)
   { 0, 0, 0,  1,   0,   0,    PlantExitFaces_Center,      19 }, // BASE LEAF + CENTER LEAF + LEFT FLOWER
   { 0, 0, 0,  1,   0,   0,    PlantExitFaces_Center,      20 }, // BASE LEAF + CENTER LEAF + RIGHT FLOWER
@@ -406,7 +412,8 @@ PlantStateNode plantStateGraphSeaweed[] =
 {
 // BASE  
 //  G1 G2 W   B    AS,  1/2,  EXITS                       R
-  { 0, 0, 0,  0,   1,   0,    PlantExitFaces_Center,      13 }, // CENTER LEAF
+  { 1, 0, 1,  0,   1,   0,    PlantExitFaces_Center,      13 }, // CENTER LEAF
+  { 0, 0, 0,  0,   1,   0,    PlantExitFaces_Center,      13 }, // CENTER LEAF (doubled to withstand crawly)
 
 // STAGE 1 (NORMAL)
 //  G1 G2 W   B    AS,  1/2,  EXITS                       R
@@ -416,7 +423,7 @@ PlantStateNode plantStateGraphSeaweed[] =
   { 1, 3, 0,  1,   0,   0,    PlantExitFaces_Center,      1 }, // BASE LEAF (choice fork or flower)
   { 1, 1, 0,  1,   0,   0,    PlantExitFaces_Center,      3 }, // BASE LEAF + CENTER LEAF (choice fork side)
   { 0, 0, 0,  1,   0,   1,    PlantExitFaces_LeftCenter,  23 }, // BASE LEAF + CENTER LEAF + LEFT LEAF
-  { 0, 0, 0,  1,   0,   1,    PlantExitFaces_CenterRight, 24 }, // BASE LEAF + CENTER LEAF + RIGHT LEAF
+  { 0, 0, 0,  1,   0,   1,    PlantExitFaces_CenterRight, 2 }, // BASE LEAF + CENTER LEAF + RIGHT LEAF
   { 1, 0, 1,  0,   0,   0,    PlantExitFaces_None,        15 }, // BASE LEAF + CENTER FLOWER
   { 0, 0, 0,  0,   0,   0,    PlantExitFaces_None,        16 }, // BASE LEAF + CENTER FLOWER + SIDE LEAVES
 };
@@ -439,9 +446,11 @@ PlantStateNode plantStateGraphDangle[] =
 //  G1 G2 W   B    AS,  1/2,  EXITS                       R
   { 1, 1, 1,  1,   0,   0,    PlantExitFaces_None,        1 }, // BASE LEAF
   { 0, 0, 0,  1,   0,   0,    PlantExitFaces_Center,      3 }, // BASE LEAF + CENTER LEAF
-  { 1, 0, 0,  1,   1,   0,    PlantExitFaces_Center,      3 }, // BASE LEAF + CENTER LEAF (ADVANCE STAGE)
-  { 1, 0, 0,  1,   1,   0,    PlantExitFaces_Center,      3 }, // BASE LEAF + CENTER LEAF (ADVANCE STAGE)
-  { 0, 0, 0,  1,   0,   0,    PlantExitFaces_Center,      3 }, // BASE LEAF + CENTER LEAF
+  { 1, 0, 0,  1,   1,   0,    PlantExitFaces_Center,      3 }, // BASE LEAF + CENTER LEAF (advance stage)
+  { 1, 0, 0,  1,   1,   0,    PlantExitFaces_Center,      3 }, // BASE LEAF + CENTER LEAF (advance stage)
+  { 0, 0, 0,  1,   0,   0,    PlantExitFaces_Center,      3 }, // BASE LEAF + CENTER LEAF (NOTE: *not* advance stage)
+  // Note this last state in stage 2 above is *not* an advance stage. That is to prevent the player from resetting 
+  // a flower in the next tile and automatically getting another flower. No infinite flowers for you.
 
 // STAGE 3 (FLOWER)
 //  G1 G2 W   B    AS,  1/2,  EXITS                       R
@@ -455,11 +464,11 @@ PlantStateNode plantStateGraphMushroom[] =
 // BASE
 //  G1 G2 W   B    AS,  1/2,  EXITS                       R
   { 0, 0, 0,  0,   1,   0,    PlantExitFaces_Center,      13 }, // CENTER LEAF
+  { 0, 0, 0,  0,   1,   0,    PlantExitFaces_Center,      13 }, // CENTER LEAF  (unused - padding)
 
 // STAGE 1 (TOP)
 //  G1 G2 W   B    AS,  1/2,  EXITS                       R
   { 1, 0, 1,  0,   0,   0,    PlantExitFaces_None,        1 }, // BASE LEAF
-  { 1, 0, 0,  0,   0,   0,    PlantExitFaces_None,        3 }, // BASE LEAF + CENTER LEAF
   { 0, 0, 0,  0,   0,   0,    PlantExitFaces_None,        21 }, // BASE LEAF + THREE LEAVES
 };
 
@@ -474,27 +483,27 @@ PlantStateNode plantStateGraphCoral[] =
 //  G1 G2 W   B    AS,  1/2,  EXITS                       R
   { 1, 0, 1,  0,   0,   0,    PlantExitFaces_None,        1 }, // BASE LEAF
   { 1, 1, 1,  0,   0,   0,    PlantExitFaces_None,        3 }, // BASE LEAF + CENTER LEAF
-  { 0, 0, 0,  1,   0,   0,    PlantExitFaces_Center,      21 }, // BASE LEAF + THREE LEAVES
-  { 0, 0, 0,  0,   0,   0,    PlantExitFaces_LeftRight,   21 }, // BASE LEAF + THREE LEAVES
+  { 0, 0, 0,  1,   0,   0,    PlantExitFaces_Center,      21 }, // BASE LEAF + THREE LEAVES (bend up)
+  { 0, 0, 0,  0,   0,   1,    PlantExitFaces_LeftRight,   21 }, // BASE LEAF + THREE LEAVES
 };
 
 PlantStateNode plantStateGraphSeaBush[] =
 {
 // BASE
 //  G1 G2 W   B    AS,  1/2,  EXITS                       R
-  { 1, 0, 1,  0,   1,   1,    PlantExitFaces_LeftRight,   25 }, // SIDE LEAVES
-  { 0, 0, 0,  0,   1,   1,    PlantExitFaces_LeftRight,   25 }, // SIDE LEAVES (doubled to withstand crawly)
+  { 1, 0, 1,  0,   1,   1,    PlantExitFaces_LeftRight,   0 }, // SIDE LEAVES
+  { 0, 0, 0,  0,   1,   1,    PlantExitFaces_LeftRight,   0 }, // SIDE LEAVES (doubled to withstand crawly)
   
 // STAGE 1
 //  G1 G2 W   B    AS,  1/2,  EXITS                       R
-  { 1, 2, 1,  0,   0,   0,    PlantExitFaces_None,        1 }, // BASE LEAF (choice)
-  { 1, 3, 1,  0,   0,   0,    PlantExitFaces_Left,        11 }, // BASE LEAF + LEFT LEAF (choice)
+  { 1, 2, 1,  0,   0,   0,    PlantExitFaces_None,        1 }, // BASE LEAF (choice: left or right first)
+  { 1, 3, 1,  0,   0,   0,    PlantExitFaces_Left,        11 }, // BASE LEAF + LEFT LEAF (choice: end or more)
   { 0, 0, 0,  0,   0,   0,    PlantExitFaces_Left,        11 }, // BASE LEAF + LEFT LEAF (END)
-  { 1, 1, 1,  0,   0,   0,    PlantExitFaces_Right,       12 }, // BASE LEAF + RIGHT LEAF (choice)
+  { 1, 1, 1,  0,   0,   0,    PlantExitFaces_Right,       12 }, // BASE LEAF + RIGHT LEAF (choice: end or more)
   { 0, 0, 0,  0,   0,   0,    PlantExitFaces_Right,       12 }, // BASE LEAF + RIGHT LEAF (END)
-  { 1, 1, 0,  0,   0,   1,    PlantExitFaces_LeftRight,   7 }, // BASE LEAF + BOTH LEAVES (choice)
+  { 1, 1, 0,  0,   0,   1,    PlantExitFaces_LeftRight,   7 }, // BASE LEAF + BOTH LEAVES (choice: leaf or flower)
   { 0, 0, 0,  0,   0,   1,    PlantExitFaces_LeftRight,   7 }, // BASE LEAF + BOTH LEAVES (END)
-  { 1, 1, 0,  0,   0,   1,    PlantExitFaces_LeftRight,   7 }, // BASE LEAF + BOTH LEAVES (choice)
+  { 1, 1, 0,  0,   0,   1,    PlantExitFaces_LeftRight,   7 }, // BASE LEAF + BOTH LEAVES (choice : leaf or flower)
   { 0, 0, 0,  0,   0,   1,    PlantExitFaces_LeftRight,   17 }, // BASE LEAF + LEFT LEAF + RIGHT FLOWER
   { 0, 0, 0,  0,   0,   1,    PlantExitFaces_LeftRight,   18 }, // BASE LEAF + RIGHT LEAF + LEFT FLOWER
 };
@@ -503,19 +512,24 @@ struct PlantParams
 {
   PlantStateNode *stateGraph;
   uint16_t leafColor;
-  byte branchStageIndexes[3];   // for some reason, making this array 3 entries bloats code by 12 bytes
 };
 
 PlantParams plantParams[] =
 {
   // State graph              Leaf color
-  {  plantStateGraphTree,     RGB_TO_U16_WITH_DIM(  0, 255,   0),  { 2, 9, 11 },  },
-  {  plantStateGraphVine,     RGB_TO_U16_WITH_DIM(  0, 192,  64),  { 1, 0,  0 },  },
-  {  plantStateGraphDangle,   RGB_TO_U16_WITH_DIM(160,  64,   0),  { 2, 6, 11 },  },
-  {  plantStateGraphMushroom, RGB_TO_U16_WITH_DIM( 64, 160,  32),  { 1, 0,  0 },  },
-  {  plantStateGraphSeaweed,  RGB_TO_U16_WITH_DIM(128, 160,   0),  { 1, 0,  0 },  },
-  {  plantStateGraphCoral,    RGB_TO_U16_WITH_DIM(160, 128,  64),  { 2, 0,  0 },  },
-  {  plantStateGraphSeaBush,  RGB_TO_U16_WITH_DIM(  0, 192,  64),  { 2, 0,  0 },  },
+  {  plantStateGraphTree,     RGB_TO_U16_WITH_DIM(  0, 255,   0)  },
+  {  plantStateGraphDangle,   RGB_TO_U16_WITH_DIM(160,  64,   0)  },
+  {  plantStateGraphVine,     RGB_TO_U16_WITH_DIM(  0, 220,  64)  },
+  {  plantStateGraphMushroom, RGB_TO_U16_WITH_DIM(160, 160,  32)  },
+  {  plantStateGraphSeaweed,  RGB_TO_U16_WITH_DIM(128, 160,   0)  },
+  {  plantStateGraphCoral,    RGB_TO_U16_WITH_DIM(160, 128,  64)  },
+  {  plantStateGraphSeaBush,  RGB_TO_U16_WITH_DIM(  0, 192,  64)  },
+};
+
+byte plantBranchStage23Indexes[2][2] =
+{
+  { 9, 11 },
+  { 6, 11 }
 };
 
 // Timer that controls how often a plant must pay its maintenance cost or else wither.
@@ -618,18 +632,22 @@ enum CrawlDir
 
 #define CRAWLY_INVALID_FACE 7
 
-CrawlDir crawlyDir;
+struct CrawlyInfo
+{
+  CrawlDir crawlDir : 1;
+  byte hunger       : 5;
+};
+CrawlyInfo crawlyInfo;
+
 byte crawlyHeadFace = CRAWLY_INVALID_FACE;
 byte crawlyTailFace = CRAWLY_INVALID_FACE;
 byte crawlyFadeFace = CRAWLY_INVALID_FACE;
 bool crawlyTransferAttempted = false;
 bool crawlyTransferAccepted = false;
 char crawlyTransferDelay = 0;
-byte crawlySpawnFace;
 
 #define CRAWLY_HUNGRY_LEVEL 15
 #define CRAWLY_STARVED_LEVEL 28
-byte crawlyHunger = 0;
 
 // =================================================================================================
 //
@@ -743,7 +761,10 @@ void updateCommOnFaces()
       faceState->flags &= ~FaceFlag_NeighborWaterFull;
 
       // No neighbor is a good place to spawn a crawly
-      crawlySpawnFace = f;
+      if (!(tileFlags & TileFlag_HasCrawly))
+      {
+        crawlyHeadFace = f;
+      }
       continue;
     }
 
@@ -925,7 +946,7 @@ void __attribute__((noinline)) setFishMoveTimer()
 
 void __attribute__((noinline)) setCrawlyMoveTimer()
 {
-  crawlyMoveTimer.set((crawlyHunger >= CRAWLY_HUNGRY_LEVEL) ? CRAWLY_MOVE_RATE_HUNGRY : CRAWLY_MOVE_RATE);
+  crawlyMoveTimer.set((crawlyInfo.hunger >= CRAWLY_HUNGRY_LEVEL) ? CRAWLY_MOVE_RATE_HUNGRY : CRAWLY_MOVE_RATE);
 }
 
 void __attribute__((noinline)) setGravityTimer()
@@ -998,6 +1019,15 @@ void handleUserInput()
 #endif
     else if (clicks == 3)
     {
+      if (tileFlags & TileFlag_HasDirt)
+      {
+        tileFlags &= ~TileFlag_HasDirt;
+      }
+      else
+      {
+        tileFlags &= ~TileFlag_HasDripper;
+        tileFlags |= TileFlag_HasDirt;
+      }
     }
   }
 
@@ -1007,14 +1037,10 @@ void handleUserInput()
     if (tileFlags & TileFlag_HasDripper)
     {
       tileFlags &= ~TileFlag_HasDripper;
-      tileFlags |= TileFlag_HasDirt;
-    }
-    else if (tileFlags & TileFlag_HasDirt)
-    {
-      tileFlags &= ~TileFlag_HasDirt;
     }
     else
     {
+      tileFlags &= ~TileFlag_HasDirt;
       tileFlags |= TileFlag_HasDripper;
       gravityUpFace = DEFAULT_GRAVITY_UP_FACE;  // dripper defines gravity
 
@@ -1185,11 +1211,10 @@ void processCommForFace(Command command, byte value, byte f)
         tileFlags |= TileFlag_HasCrawly;
         enqueueCommOnFace(f, Command_Accepted, command);
 
-        crawlyDir = (CrawlDir) (value & 0x1);
         crawlyHeadFace = f;
         crawlyTailFace = CRAWLY_INVALID_FACE;
         crawlyFadeFace = CRAWLY_INVALID_FACE;
-        crawlyHunger = (value >> 1) + 1;
+        crawlyInfo = *((CrawlyInfo*) &value);
 
         setCrawlyMoveTimer();
         crawlyTransferDelay = 2;  // countdown: 2 = don't show, 1 = don't move
@@ -1256,7 +1281,15 @@ void processCommForFace(Command command, byte value, byte f)
       {
         plantBranchStage = value & 0x3;
         plantType = value >> 2;
-        plantStateNodeIndex = plantParams[plantType].branchStageIndexes[plantBranchStage-1];
+        if (plantBranchStage == 1)
+        {
+          plantStateNodeIndex = 2;  // every base stage is 2 states (to save data storage)
+        }
+        else
+        {
+          //plantStateNodeIndex = plantParams[plantType].branchStageIndexes[plantBranchStage-2];
+          plantStateNodeIndex = plantBranchStage23Indexes[plantType][plantBranchStage-2];
+        }
         plantIsInResetState = true;
       }
       break;
@@ -1521,10 +1554,10 @@ void loopPlantMaintain()
   // And we force it to wither by making its maintain cost super high
   if (tileFlags & TileFlag_HasCrawly && crawlyHeadFace != CRAWLY_INVALID_FACE)
   {
-    if (crawlyHunger >= CRAWLY_HUNGRY_LEVEL)
+    if (crawlyInfo.hunger >= CRAWLY_HUNGRY_LEVEL)
     {
       maintainCost = 99;
-      crawlyHunger = 0;
+      crawlyInfo.hunger = 0;
       plantMaintainTimer.set(0);  // force immediate timer expiration
     }
   }
@@ -1595,18 +1628,18 @@ PlantType plantTypeSelection[6][2] =
 {
   { PlantType_Tree,     PlantType_Tree },
   { PlantType_Dangle,   PlantType_Mushroom },
+  { PlantType_Vine,     PlantType_Mushroom },
   { PlantType_Vine,     PlantType_Vine },
-  { PlantType_Vine,     PlantType_Vine },
-  { PlantType_Vine,     PlantType_Vine },
+  { PlantType_Vine,     PlantType_Mushroom },
   { PlantType_Dangle,   PlantType_Mushroom },
 };
 PlantType plantTypeSelectionSubmerged[6][2] =
 {
   { PlantType_Seaweed,  PlantType_Seaweed },
   { PlantType_Seaweed,  PlantType_Coral },
-  { PlantType_SeaBush,  PlantType_Mushroom },
+  { PlantType_SeaBush,  PlantType_Coral },
   { PlantType_SeaBush,  PlantType_None },
-  { PlantType_SeaBush,  PlantType_Mushroom },
+  { PlantType_SeaBush,  PlantType_Coral },
   { PlantType_Seaweed,  PlantType_Coral },
 };
 
@@ -1996,11 +2029,11 @@ void loopCrawly()
   setCrawlyMoveTimer();
 
   // Did crawly starve? :(
-  if (crawlyHunger == CRAWLY_STARVED_LEVEL)
+  if (crawlyInfo.hunger == CRAWLY_STARVED_LEVEL)
   {
     tileFlags &= ~TileFlag_HasCrawly;
   }
-  else if (crawlyHunger > CRAWLY_STARVED_LEVEL)
+  else if (crawlyInfo.hunger > CRAWLY_STARVED_LEVEL)
   {
     // NOTE : This is to cover an unexplained behavior seen while testing.
     //
@@ -2014,7 +2047,7 @@ void loopCrawly()
     // hunger has jumped higher than it can ever naturally get. I then reset her hunger back to zero.
     //
     // The user could use this instead to keep her alive instead of feeding her plants, but oh well.
-    crawlyHunger = 0;
+    crawlyInfo.hunger = 0;
   }
 
   // First two loops after a transfer we don't want to move
@@ -2062,9 +2095,9 @@ void loopCrawly()
   byte ccwFace = CW_FROM_FACE(crawlyHeadFace, 5);
   byte cwFace2 = CW_FROM_FACE(crawlyHeadFace, 2);
   byte ccwFace2 = CW_FROM_FACE(crawlyHeadFace, 4);
-  byte forwardFace = crawlyDir ? ccwFace : cwFace;
+  byte forwardFace = crawlyInfo.crawlDir ? ccwFace : cwFace;
   bool canMoveForward = !(faceStates[forwardFace].flags & FaceFlag_NeighborPresent);
-  byte backFace = crawlyDir ? cwFace : ccwFace;
+  byte backFace = crawlyInfo.crawlDir ? cwFace : ccwFace;
   bool canMoveBackward = !(faceStates[backFace].flags & FaceFlag_NeighborPresent);
 
   byte nextFace = CRAWLY_INVALID_FACE;
@@ -2081,7 +2114,7 @@ void loopCrawly()
   {
     // Turn around!
     nextFace = backFace;
-    crawlyDir = (CrawlDir) ~crawlyDir;
+    crawlyInfo.crawlDir = (CrawlDir) ~crawlyInfo.crawlDir;
   }
   else
   {
@@ -2095,7 +2128,7 @@ void loopCrawly()
 
     // Only time crawly has a choice of where to go is at a narrow entrance
     // Either she can transfer to the other tile or continue across the gap within the same tile
-    forwardFace = crawlyDir ? ccwFace2 : cwFace2;
+    forwardFace = crawlyInfo.crawlDir ? ccwFace2 : cwFace2;
     canMoveForward = !(faceStates[forwardFace].flags & FaceFlag_NeighborPresent);
     if (!canMoveForward || (RANDOM_BYTE() & 0x3))
     {
@@ -2105,7 +2138,7 @@ void loopCrawly()
         // Try to transfer to the neighbor tile
         crawlyTransferAttempted = true;
         crawlyTransferAccepted = false;
-        enqueueCommOnFace(crawlyHeadFace, Command_TransferCrawly, crawlyDir | (crawlyHunger << 1));
+        enqueueCommOnFace(crawlyHeadFace, Command_TransferCrawly, *((byte*) &crawlyInfo));
       }
     }
   }
@@ -2155,8 +2188,7 @@ void trySpawnCritter()
   else
   {
     tileFlags |= TileFlag_HasCrawly;
-    crawlyHeadFace = crawlySpawnFace;
-    crawlyHunger = 0;
+    crawlyInfo.hunger = 0;
   }
 
   tileFlags |= TileFlag_SpawnedCritter;
@@ -2362,7 +2394,7 @@ void render()
   if (tileFlags & TileFlag_HasCrawly && crawlyTransferDelay < 2)
   {
     color.as_uint16 = U16_CRAWLY;
-    if (crawlyHunger >= CRAWLY_HUNGRY_LEVEL)
+    if (crawlyInfo.hunger >= CRAWLY_HUNGRY_LEVEL)
     {
       color.as_uint16 = color.as_uint16 >> 1;
     }
@@ -2381,12 +2413,19 @@ void render()
   }
 
   // DRIPPER
+#ifndef DISABLE_DRIPPER_RENDERING
   if (tileFlags & TileFlag_HasDripper)
   {
     // Dripper is always on face 0
-    color.as_uint16 = U16_DRIPPER;
+    switch (dripperSpeedScale)
+    {
+      case 0: color.as_uint16 = U16_DRIPPER0; break;
+      case 1: color.as_uint16 = U16_DRIPPER1; break;
+      case 2: color.as_uint16 = U16_DRIPPER2; break;
+    }
     SET_COLOR_ON_FACE(color, 0);
   }
+#endif
 
 #if DEBUG_PLANT_ENERGY
   if (tileFlags & TileFlag_ShowPlantEnergy)
@@ -2428,6 +2467,17 @@ void render()
 }
 
 /*
+
+2020-Sep-24
+* Add three separate colors for three dripper speeds
+* Toyed with reducing comm queue to 3 entries per face, but that introduced fish duplication O_O
+* Move dripper to double click and dirt to triple click
+* Remove mushroom from submerged plant choices since it wouldn't survive under water anyway
+* Data space optimizations
+  o Remove unused plant rendering states
+  o Move plant branch indexes to their own array since it was pretty sparse
+  o Create CrawlyInfo struct that is passed between tiles
+  o Remove crawlySpawnFace and just set crawlyHeadFace directly
 
 2020-Sep-22
 * Reduce comm queue size to 3 entries per face to save 12 bytes
