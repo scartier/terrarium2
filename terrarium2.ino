@@ -89,9 +89,9 @@ byte faceOffsetArray[] = { 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5 };
 
 #define RGB_TO_U16_WITH_DIM(r,g,b) ((((uint16_t)(r)>>3>>DIM_COLORS) & 0x1F)<<1 | (((uint16_t)(g)>>3>>DIM_COLORS) & 0x1F)<<6 | (((uint16_t)(b)>>3>>DIM_COLORS) & 0x1F)<<11)
 
-#define U16_DRIPPER0      RGB_TO_U16_WITH_DIM(   0, 128,  64 )
-#define U16_DRIPPER1      RGB_TO_U16_WITH_DIM(   0, 192,  96 )
-#define U16_DRIPPER2      RGB_TO_U16_WITH_DIM(   0, 255, 128 )
+#define U16_DRIPPER0      RGB_TO_U16_WITH_DIM(   0, 192, 128 )
+#define U16_DRIPPER1      RGB_TO_U16_WITH_DIM(   0, 255, 128 )
+#define U16_DRIPPER2      RGB_TO_U16_WITH_DIM(   0, 255, 192 )
 #define U16_CRAWLY        RGB_TO_U16_WITH_DIM( 128, 255,  64 )
 #define U16_BUG           RGB_TO_U16_WITH_DIM( 179, 255,   0 )
 #define U16_WATER         RGB_TO_U16_WITH_DIM(   0,   0,  96 )
@@ -99,7 +99,7 @@ byte faceOffsetArray[] = { 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5 };
 #define U16_FERTILE       RGB_TO_U16_WITH_DIM(  96, 128,   0 )
 #define U16_BRANCH        RGB_TO_U16_WITH_DIM( 191, 128,   0 )
 #define U16_FLOWER        RGB_TO_U16_WITH_DIM( 255, 192, 192 )
-#define U16_FLOWER_USED   RGB_TO_U16_WITH_DIM( 255, 128, 128 )
+#define U16_FLOWER_USED   RGB_TO_U16_WITH_DIM( 192,  64,  64 )
 
 #define U16_DEBUG         RGB_TO_U16_WITH_DIM( 255, 128,  64 )
 
@@ -355,6 +355,9 @@ byte plantRenderLUTIndexes[] =
   0b01010100,   // 22: THREE LEAVES
 
   0b00010101,   // 23: BASE LEAF + CENTER & LEFT LEAVES
+
+  0b00010110,   // 24: BASE LEAF + CENTER & LEFT LEAVES
+  0b01010010,   // 25: BASE LEAF + CENTER & RIGHT LEAVES
 };
 
 PlantStateNode plantStateGraphTree[] =
@@ -366,7 +369,7 @@ PlantStateNode plantStateGraphTree[] =
 
 // STAGE 1 (TRUNK)
 //  G1 G2 W   B    AS,  1/2,  EXITS                       R
-  { 1, 3, 1,  0,   0,   0,    PlantExitFaces_None,        1 }, // BASE LEAF (Choice between trunk and fork)
+  { 1, 3, 1,  0,   0,   0,    PlantExitFaces_None,        1 }, // BASE LEAF (choice between trunk and fork)
   { 1, 0, 0,  0,   0,   0,    PlantExitFaces_Center,      4 }, // BASE BRANCH + CENTER LEAF
   { 1, 0, 1,  0,   0,   0,    PlantExitFaces_Center,      5 }, // BASE BRANCH + CENTER BRANCH
   { 0, 0, 0,  0,   0,   0,    PlantExitFaces_Center,      6 }, // BASE BRANCH + CENTER BRANCH + SIDE LEAVES
@@ -376,8 +379,11 @@ PlantStateNode plantStateGraphTree[] =
 
 // STAGE 2 (BENDY BRANCHES)
 //  G1 G2 W   B    AS,  1/2,  EXITS                       R
-  { 1, 0, 1,  1,   0,   0,    PlantExitFaces_None,        1 }, // BASE LEAF
+  { 1, 1, 1,  0,   0,   0,    PlantExitFaces_None,        1 }, // BASE LEAF (choice on how to fork)
   { 0, 0, 0,  1,   1,   1,    PlantExitFaces_LeftRight,   8 }, // BASE BRANCH + TWO LEAVES
+  { 1, 1, 0,  0,   0,   0,    PlantExitFaces_None,        1 }, // BASE LEAF (choice on left or right)
+  { 0, 0, 0,  1,   1,   1,    PlantExitFaces_LeftCenter,  24 }, // BASE LEAF + CENTER LEAF + LEFT LEAF
+  { 0, 0, 0,  1,   1,   1,    PlantExitFaces_CenterRight, 25 }, // BASE LEAF + CENTER LEAF + RIGHT LEAF
 
 // STAGE 3 (VINE or DROOPY FLOWER)
 //  G1 G2 W   B    AS,  1/2,  EXITS                       R
@@ -396,14 +402,13 @@ PlantStateNode plantStateGraphVine[] =
 
 // STAGE 1 (NORMAL)
 //  G1 G2 W   B    AS,  1/2,  EXITS                       R
-  { 1, 1, 1,  1,   0,   0,    PlantExitFaces_None,        1 }, // BASE LEAF (choice normal or not 1 of 2)
-  { 1, 1, 1,  1,   0,   0,    PlantExitFaces_Center,      3 }, // BASE LEAF + CENTER LEAF (choice normal or not 2 of 2)
-  { 0, 0, 0,  1,   0,   0,    PlantExitFaces_Center,      3 }, // BASE LEAF + CENTER LEAF (end state 75%)
+  { 1, 1, 1,  1,   0,   0,    PlantExitFaces_None,        1 }, // BASE LEAF (choice normal or not)
+  { 0, 0, 0,  1,   0,   0,    PlantExitFaces_Center,      3 }, // BASE LEAF + CENTER LEAF (end state 50%)
   { 1, 3, 0,  1,   0,   0,    PlantExitFaces_Center,      3 }, // BASE LEAF + CENTER LEAF (choice fork or flower)
-  { 1, 1, 0,  1,   0,   0,    PlantExitFaces_Center,      3 }, // BASE LEAF + CENTER LEAF (choice fork side)
+  { 1, 1, 1,  1,   0,   0,    PlantExitFaces_Center,      3 }, // BASE LEAF + CENTER LEAF (choice fork side)
   { 0, 0, 0,  1,   0,   1,    PlantExitFaces_LeftCenter,  23 }, // BASE LEAF + CENTER LEAF + LEFT LEAF
   { 0, 0, 0,  1,   0,   1,    PlantExitFaces_CenterRight, 2 }, // BASE LEAF + CENTER LEAF + RIGHT LEAF
-  { 1, 1, 0,  1,   0,   0,    PlantExitFaces_Center,      3 }, // BASE LEAF + CENTER LEAF + LEFT LEAF (choice flower side)
+  { 1, 1, 1,  1,   0,   0,    PlantExitFaces_Center,      3 }, // BASE LEAF + CENTER LEAF (choice flower side)
   { 0, 0, 0,  1,   0,   0,    PlantExitFaces_Center,      19 }, // BASE LEAF + CENTER LEAF + LEFT FLOWER
   { 0, 0, 0,  1,   0,   0,    PlantExitFaces_Center,      20 }, // BASE LEAF + CENTER LEAF + RIGHT FLOWER
 };
@@ -417,11 +422,10 @@ PlantStateNode plantStateGraphSeaweed[] =
 
 // STAGE 1 (NORMAL)
 //  G1 G2 W   B    AS,  1/2,  EXITS                       R
-  { 1, 1, 1,  1,   0,   0,    PlantExitFaces_None,        1 }, // BASE LEAF (choice normal or not 1 of 2)
-  { 1, 1, 0,  1,   0,   0,    PlantExitFaces_Center,      1 }, // BASE LEAF (choice normal or not 2 of 2)
-  { 0, 0, 0,  1,   0,   0,    PlantExitFaces_Center,      3 }, // BASE LEAF + CENTER LEAF (end state 75%)
+  { 1, 1, 1,  1,   0,   0,    PlantExitFaces_None,        1 }, // BASE LEAF (choice normal or not)
+  { 0, 0, 0,  1,   0,   0,    PlantExitFaces_Center,      3 }, // BASE LEAF + CENTER LEAF (end state 50%)
   { 1, 3, 0,  1,   0,   0,    PlantExitFaces_Center,      1 }, // BASE LEAF (choice fork or flower)
-  { 1, 1, 0,  1,   0,   0,    PlantExitFaces_Center,      3 }, // BASE LEAF + CENTER LEAF (choice fork side)
+  { 1, 1, 1,  1,   0,   0,    PlantExitFaces_Center,      3 }, // BASE LEAF + CENTER LEAF (choice fork side)
   { 0, 0, 0,  1,   0,   1,    PlantExitFaces_LeftCenter,  23 }, // BASE LEAF + CENTER LEAF + LEFT LEAF
   { 0, 0, 0,  1,   0,   1,    PlantExitFaces_CenterRight, 2 }, // BASE LEAF + CENTER LEAF + RIGHT LEAF
   { 1, 0, 1,  0,   0,   0,    PlantExitFaces_None,        15 }, // BASE LEAF + CENTER FLOWER
@@ -469,6 +473,7 @@ PlantStateNode plantStateGraphMushroom[] =
 // STAGE 1 (TOP)
 //  G1 G2 W   B    AS,  1/2,  EXITS                       R
   { 1, 0, 1,  0,   0,   0,    PlantExitFaces_None,        1 }, // BASE LEAF
+  { 1, 0, 0,  0,   0,   0,    PlantExitFaces_None,        3 }, // BASE LEAF + CENTER LEAF (not a wither state so crawly can eat the cap)
   { 0, 0, 0,  0,   0,   0,    PlantExitFaces_None,        21 }, // BASE LEAF + THREE LEAVES
 };
 
@@ -528,7 +533,7 @@ PlantParams plantParams[] =
 
 byte plantBranchStage23Indexes[2][2] =
 {
-  { 9, 11 },
+  { 9, 14 },
   { 6, 11 }
 };
 
@@ -1099,6 +1104,7 @@ void resetOurState()
   memclr(waterLevels, 6);
   reservoir = 0;
   resetPlantState();
+  dripperSpeedScale = 0;
 }
 
 void processCommForFace(Command command, byte value, byte f)
@@ -1123,7 +1129,7 @@ void processCommForFace(Command command, byte value, byte f)
     // Water received from a neighbor
     case Command_AddWater:
       faceStates[f].waterAdded += value;
-      
+
       // Clear our full flag since the neighbor clearly thinks we are not full
       // If we are actually full then this will get set and we'll send another message to update the neighbor
       faceState->flags &= ~FaceFlag_WaterFull;
@@ -1595,9 +1601,13 @@ void loopPlantMaintain()
 
   bool plantIsSubmerged = tileFlags & TileFlag_Submerged;
   bool plantIsAquatic = plantType >= PlantType_Seaweed;
-  if (plantIsSubmerged != plantIsAquatic)
+  if (plantType != PlantType_Mushroom)
   {
-    plantEnergy = 0;
+    // Mushrooms are the only plant type that can live either above or below water
+    if (plantIsSubmerged != plantIsAquatic)
+    {
+      plantEnergy = 0;
+    }
   }
   
   // Use energy to maintain the current state
@@ -1637,9 +1647,9 @@ PlantType plantTypeSelectionSubmerged[6][2] =
 {
   { PlantType_Seaweed,  PlantType_Seaweed },
   { PlantType_Seaweed,  PlantType_Coral },
-  { PlantType_SeaBush,  PlantType_Coral },
-  { PlantType_SeaBush,  PlantType_None },
-  { PlantType_SeaBush,  PlantType_Coral },
+  { PlantType_SeaBush,  PlantType_Mushroom },
+  { PlantType_SeaBush,  PlantType_Mushroom },
+  { PlantType_SeaBush,  PlantType_Mushroom },
   { PlantType_Seaweed,  PlantType_Coral },
 };
 
@@ -2209,6 +2219,14 @@ void postProcessState()
   {
     gravityTimer.set(GRAVITY_RATE);
   }
+
+  // BUG
+  // If a tile is woken up by click, but isn't the one actually clicked (hive wake) then the first
+  // click will be ignored inside handleUserInput(). I believe this is because hasWoken() clears
+  // a flag, which is done on the tile that is clicked, but not any of the others connected to it.
+  //
+  // Call hasWoken() explicitly here to clear the flag.
+  hasWoken();
 }
 
 void accumulateWater()
@@ -2274,6 +2292,17 @@ void evaporateWater()
     {
       waterLevels[f]--;
     }
+
+    // BUG
+    //
+    // Saw that sometimes a neighbor tile would think we are full when we're not, which
+    // was preventing them from flowing water into us. Set our full flag after
+    // evaporation. If we are *not* full then this will cause a SetWaterFull comm to
+    // be sent to our neighbor to tell them we aren't full.
+    //
+    // Performance impact: Excessive and redundant comm packets, but this routine is
+    // only performed once every 5 seconds so it shouldn't be too bad.
+    faceStates[f].flags |= FaceFlag_WaterFull;
   }
 
   // Dirt faces evaporate from the stored amount
@@ -2467,6 +2496,14 @@ void render()
 }
 
 /*
+
+2020-Sep-27
+* Adjusted colors of dripper speeds. And used flower to be more distinct from regular flower.
+* Add more variety to the forks of the tree's second stage.
+* Made vine and seaweed forks/flowers more likely because straight plants are boring.
+* Allow mushrooms to exist above or below water. Add mushrooms as alternate plants in submerged tiles.
+* BUG FIX: Call hasWoken at the end of loop to clear the woken flag for tiles not woken by click.
+* BUG FIX: Was seeing tiles stop sending water to neighbors, thinking they are full. Periodically (during evaporation timer) force non-full tiles send their water state.
 
 2020-Sep-24
 * Add three separate colors for three dripper speeds
