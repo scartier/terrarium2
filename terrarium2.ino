@@ -1,7 +1,7 @@
 // TERRARIUM
 // (c) 2020 Scott Cartier
 
-#define DELUXE_VERSION      1
+#define DELUXE_VERSION      0
 
 #if DELUXE_VERSION
 #ifndef BGA_CUSTOM_BLINKLIB
