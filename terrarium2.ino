@@ -1,8 +1,12 @@
 // TERRARIUM
 // (c) 2020 Scott Cartier
 
+#define DELUXE_VERSION      1
+
+#if DELUXE_VERSION
 #ifndef BGA_CUSTOM_BLINKLIB
 #error "This code requires BGA's Custom Blinklib"
+#endif
 #endif
 
 #define null 0
@@ -18,8 +22,6 @@
 #define DIM_COLORS          0
 #define DEBUG_FACE_OUTPUT   0
 
-#define OLD_COMM_QUEUE    // testing new comm method
-
 // Stuff to disable to get more code space
 #define DISABLE_CHILD_BRANCH_GREW     // disabling saves 60 bytes
 
@@ -28,9 +30,50 @@
 //#define DISABLE_WATER_RENDERING
 //#define DISABLE_DRIPPER_RENDERING
 
+// Stuff to turn off for the non-deluxe version so that it fits with the standard blinklib
+#if DELUXE_VERSION
+#define ENABLE_CRITTER_CRAWLY
+#define ENABLE_CRITTER_FISH
+#define ENABLE_PLANT_DANGLE
+#define ENABLE_PLANT_SEABUSH
+#define ENABLE_PLANT_CORAL
+#define ENABLE_PLANT_VINE
+#define ENABLE_PLANT_SEAWEED
+#define ENABLE_PLANT_MUSHROOM
+#define EXTENDED_COMM_PAYLOAD
+#define ENABLE_MILLIS8
+#endif
+
+#ifndef ENABLE_PLANT_DANGLE
+#ifndef ENABLE_PLANT_SEABUSH
+#ifndef ENABLE_PLANT_CORAL
+#ifndef ENABLE_PLANT_VINE
+#ifndef ENABLE_PLANT_SEAWEED
+#ifndef ENABLE_PLANT_MUSHROOM
+#define ONLY_TREE_PLANT
+#endif
+#endif
+#endif
+#endif
+#endif
+#endif
+
 #if USE_DATA_SPONGE
 #warning DATA SPONGE ENABLED
-byte sponge[29];
+byte sponge[9];
+// Nov 27: Remove plant structures when only tree: 60 data (+52), 5144 code (+100)
+// Nov 25: With stock blinklib: 8 data, 5244 code
+// Nov 25: Disable MUSHROOM plant: 223 data (+10), 4400 code (+14)
+// Nov 25: Disable SEAWEED plant: 213 data (+24), 4414 code (+34)
+// Nov 25: Disable use of millis8: 189 data (0), 4448 code (0)
+// Nov 25: Disable use of 8-bit face value: 189 data (+18), 4448 code (-34)
+// Nov 25: Disable VINE plant: 171 data (+26), 4414 code (0)
+// Nov 24: Disable FISH critter: 145 data (+35), 4414 code (+516)
+// Nov 24: Disable CORAL plant: 110 data (+16), 4930 code (0)
+// Nov 24: Disable SEABUSH plant: 94 data (+28), 4930 code (0)
+// Nov 24: Disable DANGLE plant: 66 data (+32), 4930 code (0)
+// Nov 24: Disable CRAWLY critter: 34 data (+11), 4930 code (+612)
+// Nov 24: Just checking: 23 (5542 code)
 // Sep 24: Move stage 2 & 3 indexes to separate array since only two plants use them: 29
 // Sep 24: Make base stage of all plant types 2 states to avoid storing it, remove middle state from stage 1 mushroom: 19
 // Sep 24: Create CrawlyInfo struct and remove crawlySpawnFace: 16
@@ -76,7 +119,11 @@ byte faceOffsetArray[] = { 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5 };
 //#define SET_COLOR_ON_FACE(c,f) faceColors[f] = c
 //#define SET_COLOR_ON_FACE(c,f) setColorOnFace3(c.as_uint16, f)
 
+#ifdef ENABLE_MILLIS8
 #define RANDOM_BYTE() RANDOM_BYTE3
+#else
+#define RANDOM_BYTE() RANDOM_BYTE1
+#endif
 #define RANDOM_BYTE1 millis()
 #define RANDOM_BYTE2 randVal
 #define RANDOM_BYTE3 millis8()
@@ -92,7 +139,9 @@ byte faceOffsetArray[] = { 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5 };
 #define U16_DRIPPER0      RGB_TO_U16_WITH_DIM(   0, 192, 128 )
 #define U16_DRIPPER1      RGB_TO_U16_WITH_DIM(   0, 255, 128 )
 #define U16_DRIPPER2      RGB_TO_U16_WITH_DIM(   0, 255, 192 )
+#ifdef ENABLE_CRITTER_CRAWLY
 #define U16_CRAWLY        RGB_TO_U16_WITH_DIM( 128, 255,  64 )
+#endif
 #define U16_BUG           RGB_TO_U16_WITH_DIM( 179, 255,   0 )
 #define U16_WATER         RGB_TO_U16_WITH_DIM(   0,   0,  96 )
 #define U16_DIRT          RGB_TO_U16_WITH_DIM( 128,  96,   0 )
@@ -113,7 +162,11 @@ byte faceOffsetArray[] = { 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5 };
 #define TOGGLE_DATA 0
 struct FaceValue
 {
+#ifdef EXTENDED_COMM_PAYLOAD
   byte value  : 6;
+#else
+  byte value  : 4;
+#endif
   byte toggle : 1;
   byte ack    : 1;
 };
@@ -133,31 +186,31 @@ enum Command
   Command_GatherSun,        // Plant leaves gather sun and send it down to the root
   Command_QueryPlantType,   // Ask the root what plant should grow
   Command_PlantType,        // Sending the plant type
+#ifdef ENABLE_CRITTER_FISH
   Command_TransferFish,     // Attempt to transfer a fish from one tile to another (must be confirmed)
-  Command_TransferCrawly,   // Attempt to transfer a crawly from one tile to another (must be confirmed)
   Command_FishTail,         // Turn on the fish tail because the tile above us has a fish at the bottom
+#endif
+#ifdef ENABLE_CRITTER_CRAWLY
+  Command_TransferCrawly,   // Attempt to transfer a crawly from one tile to another (must be confirmed)
+#endif
 
   Command_MAX
 };
 
 struct CommandAndData
 {
-#ifndef OLD_COMM_QUEUE
-  byte face;
-#endif
+#ifdef EXTENDED_COMM_PAYLOAD
   Command command : 8;
   byte data : 8;
+#else
+  Command command : 4;
+  byte data : 4;
+#endif
 };
 
-#ifdef OLD_COMM_QUEUE
 #define COMM_QUEUE_SIZE 3
 CommandAndData commQueues[FACE_COUNT][COMM_QUEUE_SIZE];
 byte commInsertionIndexes[FACE_COUNT];
-#else
-#define COMM_QUEUE_SIZE 12
-CommandAndData commQueue[COMM_QUEUE_SIZE];
-byte commInsertionIndex;
-#endif
 
 enum FaceFlag
 {
@@ -204,8 +257,12 @@ enum TileFlags
   TileFlag_Submerged      = 1<<3,
   TileFlag_SpawnedCritter = 1<<4,
   TileFlag_HasBug         = 1<<5,
+#ifdef ENABLE_CRITTER_FISH
   TileFlag_HasFish        = 1<<6,
+#endif
+#ifdef ENABLE_CRITTER_CRAWLY
   TileFlag_HasCrawly      = 1<<7,
+#endif
 
   //TileFlag_ShowPlantEnergy = 1<<7,
 };
@@ -266,12 +323,24 @@ byte reservoir;
 enum PlantType
 {
   PlantType_Tree,
+#ifdef ENABLE_PLANT_DANGLE
   PlantType_Dangle,
+#endif
+#ifdef ENABLE_PLANT_VINE
   PlantType_Vine,
+#endif
+#ifdef ENABLE_PLANT_MUSHROOM
   PlantType_Mushroom,
+#endif
+#ifdef ENABLE_PLANT_SEAWEED
   PlantType_Seaweed,
+#endif
+#ifdef ENABLE_PLANT_CORAL
   PlantType_Coral,
+#endif
+#ifdef ENABLE_PLANT_SEABUSH
   PlantType_SeaBush,
+#endif
 
   PlantType_None = 7
 };
@@ -393,6 +462,7 @@ PlantStateNode plantStateGraphTree[] =
   { 0, 0, 0,  1,   0,   0,    PlantExitFaces_None,        16 }, // BASE LEAF + CENTER FLOWER + SIDE LEAVES
 };
 
+#ifdef ENABLE_PLANT_VINE
 PlantStateNode plantStateGraphVine[] =
 {
 // BASE  
@@ -412,7 +482,9 @@ PlantStateNode plantStateGraphVine[] =
   { 0, 0, 0,  1,   0,   0,    PlantExitFaces_Center,      19 }, // BASE LEAF + CENTER LEAF + LEFT FLOWER
   { 0, 0, 0,  1,   0,   0,    PlantExitFaces_Center,      20 }, // BASE LEAF + CENTER LEAF + RIGHT FLOWER
 };
+#endif  // ENABLE_PLANT_VINE
 
+#ifdef ENABLE_PLANT_SEAWEED
 PlantStateNode plantStateGraphSeaweed[] =
 {
 // BASE  
@@ -431,7 +503,9 @@ PlantStateNode plantStateGraphSeaweed[] =
   { 1, 0, 1,  0,   0,   0,    PlantExitFaces_None,        15 }, // BASE LEAF + CENTER FLOWER
   { 0, 0, 0,  0,   0,   0,    PlantExitFaces_None,        16 }, // BASE LEAF + CENTER FLOWER + SIDE LEAVES
 };
+#endif  // ENABLE_PLANT_SEAWEED
 
+#ifdef ENABLE_PLANT_DANGLE
 PlantStateNode plantStateGraphDangle[] =
 {
 // BASE
@@ -462,7 +536,9 @@ PlantStateNode plantStateGraphDangle[] =
   { 1, 0, 1,  1,   0,   0,    PlantExitFaces_None,        15 }, // BASE LEAF + CENTER FLOWER
   { 0, 0, 0,  1,   0,   0,    PlantExitFaces_None,        16 }, // BASE LEAF + CENTER FLOWER + SIDE LEAVES
 };
+#endif  // ENABLE_PLANT_DANGLE
 
+#ifdef ENABLE_PLANT_MUSHROOM
 PlantStateNode plantStateGraphMushroom[] =
 {
 // BASE
@@ -476,7 +552,9 @@ PlantStateNode plantStateGraphMushroom[] =
   { 1, 0, 0,  0,   0,   0,    PlantExitFaces_None,        3 }, // BASE LEAF + CENTER LEAF (not a wither state so crawly can eat the cap)
   { 0, 0, 0,  0,   0,   0,    PlantExitFaces_None,        21 }, // BASE LEAF + THREE LEAVES
 };
+#endif  // ENABLE_PLANT_MUSHROOM
 
+#ifdef ENABLE_PLANT_CORAL
 PlantStateNode plantStateGraphCoral[] =
 {
 // BASE
@@ -491,7 +569,9 @@ PlantStateNode plantStateGraphCoral[] =
   { 0, 0, 0,  1,   0,   0,    PlantExitFaces_Center,      21 }, // BASE LEAF + THREE LEAVES (bend up)
   { 0, 0, 0,  0,   0,   1,    PlantExitFaces_LeftRight,   21 }, // BASE LEAF + THREE LEAVES
 };
+#endif  // ENABLE_PLANT_CORAL
 
+#ifdef ENABLE_PLANT_SEABUSH
 PlantStateNode plantStateGraphSeaBush[] =
 {
 // BASE
@@ -512,6 +592,7 @@ PlantStateNode plantStateGraphSeaBush[] =
   { 0, 0, 0,  0,   0,   1,    PlantExitFaces_LeftRight,   17 }, // BASE LEAF + LEFT LEAF + RIGHT FLOWER
   { 0, 0, 0,  0,   0,   1,    PlantExitFaces_LeftRight,   18 }, // BASE LEAF + RIGHT LEAF + LEFT FLOWER
 };
+#endif  // ENABLE_PLANT_SEABUSH
 
 struct PlantParams
 {
@@ -519,17 +600,31 @@ struct PlantParams
   uint16_t leafColor;
 };
 
+#ifndef ONLY_TREE_PLANT
 PlantParams plantParams[] =
 {
   // State graph              Leaf color
   {  plantStateGraphTree,     RGB_TO_U16_WITH_DIM(  0, 255,   0)  },
+#ifdef ENABLE_PLANT_DANGLE
   {  plantStateGraphDangle,   RGB_TO_U16_WITH_DIM(160,  64,   0)  },
+#endif
+#ifdef ENABLE_PLANT_VINE
   {  plantStateGraphVine,     RGB_TO_U16_WITH_DIM(  0, 220,  64)  },
+#endif
+#ifdef ENABLE_PLANT_MUSHROOM
   {  plantStateGraphMushroom, RGB_TO_U16_WITH_DIM(160, 160,  32)  },
+#endif
+#ifdef ENABLE_PLANT_SEAWEED
   {  plantStateGraphSeaweed,  RGB_TO_U16_WITH_DIM(128, 160,   0)  },
+#endif
+#ifdef ENABLE_PLANT_CORAL
   {  plantStateGraphCoral,    RGB_TO_U16_WITH_DIM(160, 128,  64)  },
+#endif
+#ifdef ENABLE_PLANT_SEABUSH
   {  plantStateGraphSeaBush,  RGB_TO_U16_WITH_DIM(  0, 192,  64)  },
+#endif
 };
+#endif  // ONLY_TREE_PLANT
 
 byte plantBranchStage23Indexes[2][2] =
 {
@@ -583,6 +678,8 @@ bool bugFlapOpen      = false;
 // -------------------------------------------------------------------------------------------------
 // FISH
 //
+#ifdef ENABLE_CRITTER_FISH
+
 #define FISH_MOVE_RATE 2000
 Timer fishMoveTimer;
 Timer fishTailTimer;
@@ -620,10 +717,12 @@ uint16_t fishColors[] =
   RGB_TO_U16_WITH_DIM( 64, 255,  32),
 };
 
+#endif  // ENABLE_CRITTER_FISH
 
 // -------------------------------------------------------------------------------------------------
 // CRAWLY
 //
+#ifdef ENABLE_CRITTER_CRAWLY
 
 #define CRAWLY_MOVE_RATE 600
 #define CRAWLY_MOVE_RATE_HUNGRY 1000
@@ -653,6 +752,8 @@ char crawlyTransferDelay = 0;
 
 #define CRAWLY_HUNGRY_LEVEL 15
 #define CRAWLY_STARVED_LEVEL 28
+
+#endif  // ENABLE_CRITTER_CRAWLY
 
 // =================================================================================================
 //
@@ -686,11 +787,7 @@ void setup()
 void resetCommOnFace(byte f)
 {
   // Clear the queue
-#ifdef OLD_COMM_QUEUE
   commInsertionIndexes[f] = 0;
-#else
-  commInsertionIndex = 0;
-#endif
 
   FaceState *faceState = &faceStates[f];
 
@@ -720,31 +817,16 @@ void enqueueCommOnFace(byte f, Command command, byte data)
     return;
   }
 
-#ifdef OLD_COMM_QUEUE
   if (commInsertionIndexes[f] >= COMM_QUEUE_SIZE)
   {
     // Buffer overrun - might need to increase queue size to accommodate
     return;
   }
-#else
-  if (commInsertionIndex >= COMM_QUEUE_SIZE)
-  {
-    // Outgoing queue is full - just drop the packet
-    return;
-  }
-#endif
 
-#ifdef OLD_COMM_QUEUE
   byte index = commInsertionIndexes[f];
   commQueues[f][index].command = command;
   commQueues[f][index].data = data;
   commInsertionIndexes[f]++;
-#else
-  commQueue[commInsertionIndex].face = f;
-  commQueue[commInsertionIndex].command = command;
-  commQueue[commInsertionIndex].data = data;
-  commInsertionIndex++;
-#endif
 }
 
 // Called every iteration of loop(), preferably before any main processing
@@ -765,11 +847,14 @@ void updateCommOnFaces()
       faceState->flags &= ~FaceFlag_NeighborPresent;
       faceState->flags &= ~FaceFlag_NeighborWaterFull;
 
+#ifdef ENABLE_CRITTER_CRAWLY
       // No neighbor is a good place to spawn a crawly
       if (!(tileFlags & TileFlag_HasCrawly))
       {
         crawlyHeadFace = f;
       }
+#endif
+      
       continue;
     }
 
@@ -816,34 +901,15 @@ void updateCommOnFaces()
     // Recognize this when their ACK bit equals our current TOGGLE bit.
     if (faceValueIn.ack == faceState->faceValueOut.toggle)
     {
-#ifndef OLD_COMM_QUEUE
-      byte commIndex = 0;
-
-      for (; commIndex < commInsertionIndex; commIndex++)
-      {
-        if (commQueue[commIndex].face == f)
-        {
-          break;
-        }
-      }
-#endif
-
       // If we just sent the DATA half of the previous comm, check if there 
       // are any more commands to send.
       if (faceState->faceValueOut.toggle == TOGGLE_DATA)
       {
-#ifdef OLD_COMM_QUEUE
         if (commInsertionIndexes[f] == 0)
         {
           // Nope, no more comms to send - bail and wait
           continue;
         }
-#else
-        if (commIndex >= commInsertionIndex)
-        {
-          continue;
-        }
-#endif
       }
 
       // Send the next value, either COMMAND or DATA depending on the toggle bit
@@ -852,12 +918,8 @@ void updateCommOnFaces()
       faceState->faceValueOut.toggle = ~faceState->faceValueOut.toggle;
       
       // Grab the first element in the queue - we'll need it either way
-#ifdef OLD_COMM_QUEUE
       // [OPTIMIZE] saved 18 bytes - changed to a pointer
       CommandAndData *commandAndData = &commQueues[f][0];
-#else
-      CommandAndData *commandAndData = &commQueue[commIndex];
-#endif
 
       // Send either the command or data depending on the toggle bit
       if (faceState->faceValueOut.toggle == TOGGLE_COMMAND)
@@ -869,24 +931,13 @@ void updateCommOnFaces()
         faceState->faceValueOut.value = commandAndData->data;
   
         // No longer need this comm - shift everything towards the front of the queue
-#ifdef OLD_COMM_QUEUE
         for (byte commIndex = 1; commIndex < COMM_QUEUE_SIZE; commIndex++)
         {
           commQueues[f][commIndex-1] = commQueues[f][commIndex];
         }
-#else
-        for (; commIndex < commInsertionIndex; commIndex++)
-        {
-          commQueue[commIndex] = commQueue[commIndex+1];
-        }
-#endif
 
         // Adjust the insertion index since we just shifted the queue
-#ifdef OLD_COMM_QUEUE
         commInsertionIndexes[f]--;
-#else
-        commInsertionIndex--;
-#endif
       }
     }
   }
@@ -922,8 +973,12 @@ void loop()
   loopDirt();
   loopPlantMaintain();
   loopBug();
+#ifdef ENABLE_CRITTER_FISH
   loopFish();
+#endif
+#ifdef ENABLE_CRITTER_CRAWLY
   loopCrawly();
+#endif
 
   // Update water levels and such
   postProcessState();
@@ -939,6 +994,7 @@ void loop()
 //
 // =================================================================================================
 
+#ifdef ENABLE_CRITTER_FISH
 void __attribute__((noinline)) setFishTailTimer()
 {
   fishTailTimer.set(FISH_MOVE_RATE);
@@ -948,11 +1004,14 @@ void __attribute__((noinline)) setFishMoveTimer()
 {
   fishMoveTimer.set(FISH_MOVE_RATE);
 }
+#endif
 
+#ifdef ENABLE_CRITTER_CRAWLY
 void __attribute__((noinline)) setCrawlyMoveTimer()
 {
   crawlyMoveTimer.set((crawlyInfo.hunger >= CRAWLY_HUNGRY_LEVEL) ? CRAWLY_MOVE_RATE_HUNGRY : CRAWLY_MOVE_RATE);
 }
+#endif
 
 void __attribute__((noinline)) setGravityTimer()
 {
@@ -992,6 +1051,7 @@ void handleUserInput()
     }
 #endif
 #if DEBUG_SPAWN_FISH
+#ifdef ENABLE_CRITTER_FISH
     if (clicks == 4)
     {
       if (tileFlags & TileFlag_HasFish)
@@ -1005,8 +1065,10 @@ void handleUserInput()
         fishInfo.colorIndex = RANDOM_BYTE() & 0x3;
       }
     }
+#endif  // ENABLE_CRITTER_FISH
 #endif
 #if DEBUG_SPAWN_CRAWLY
+#ifdef ENABLE_CRITTER_CRAWLY
     if (clicks == 4)
     {
       if (tileFlags & TileFlag_HasCrawly)
@@ -1021,6 +1083,7 @@ void handleUserInput()
         crawlyTailFace = CRAWLY_INVALID_FACE;
       }
     }
+#endif  // ENABLE_CRITTER_CRAWLY
 #endif
     else if (clicks == 3)
     {
@@ -1072,7 +1135,9 @@ void handleUserInput()
     }
 
 #if DEBUG_SPAWN_FISH
+#ifdef ENABLE_CRITTER_FISH
     fishInfo.colorIndex++;
+#endif
 #endif
     
     // Button clicks are also how we try to spawn critters from flowers
@@ -1192,6 +1257,7 @@ void processCommForFace(Command command, byte value, byte f)
       }
       break;
 
+#ifdef ENABLE_CRITTER_FISH
     case Command_TransferFish:
       if (!(tileFlags & TileFlag_HasFish) && !(tileFlags & TileFlag_HasDirt) && (tileFlags & TileFlag_Submerged))
       {
@@ -1209,7 +1275,9 @@ void processCommForFace(Command command, byte value, byte f)
       fishTailColorIndex = value;
       setFishTailTimer();
       break;
+#endif  // ENABLE_CRITTER_FISH
 
+#ifdef ENABLE_CRITTER_CRAWLY
     case Command_TransferCrawly:
       if (!(tileFlags & TileFlag_HasCrawly))
       {
@@ -1226,6 +1294,7 @@ void processCommForFace(Command command, byte value, byte f)
         crawlyTransferDelay = 2;  // countdown: 2 = don't show, 1 = don't move
       }
       break;
+#endif  // ENABLE_CRITTER_CRAWLY
 
     case Command_Accepted:
       if (value == Command_TransferBug)
@@ -1233,17 +1302,21 @@ void processCommForFace(Command command, byte value, byte f)
         // Bug transferred! Remove ours
         tileFlags &= ~TileFlag_HasBug;
       }
+#ifdef ENABLE_CRITTER_FISH
       else if (value == Command_TransferFish)
       {
         // Fish transferred!
         // Don't turn off our fish until the timer expires
         fishTransferAccepted = true;
       }
+#endif
+#ifdef ENABLE_CRITTER_CRAWLY
       else if (value == Command_TransferCrawly)
       {
         // Crawly transferred!
         crawlyTransferAccepted = true;
       }
+#endif
       break;
 
 #ifndef DISABLE_CHILD_BRANCH_GREW
@@ -1273,7 +1346,11 @@ void processCommForFace(Command command, byte value, byte f)
 
         // Branch stage optionally increments
         byte stage = plantBranchStage;
+#ifdef ONLY_TREE_PLANT
+        if (plantStateGraphTree[plantStateNodeIndex].advanceStage)
+#else
         if (plantParams[plantType].stateGraph[plantStateNodeIndex].advanceStage)
+#endif
         {
           stage++;
         }
@@ -1558,6 +1635,7 @@ void loopPlantMaintain()
   // If a critter is hungry and there's a plant then EAT IT
   // Mimic this by forcing it to wither one step
   // And we force it to wither by making its maintain cost super high
+#ifdef ENABLE_CRITTER_CRAWLY
   if (tileFlags & TileFlag_HasCrawly && crawlyHeadFace != CRAWLY_INVALID_FACE)
   {
     if (crawlyInfo.hunger >= CRAWLY_HUNGRY_LEVEL)
@@ -1567,6 +1645,7 @@ void loopPlantMaintain()
       plantMaintainTimer.set(0);  // force immediate timer expiration
     }
   }
+#endif  // ENABLE_CRITTER_CRAWLY
 
   if (!plantMaintainTimer.isExpired())
   {
@@ -1574,7 +1653,11 @@ void loopPlantMaintain()
   }
   plantMaintainTimer.set(PLANT_MAINTAIN_RATE);
 
+#ifdef ONLY_TREE_PLANT
+  PlantStateNode *plantStateNode = &plantStateGraphTree[plantStateNodeIndex];
+#else
   PlantStateNode *plantStateNode = &plantParams[plantType].stateGraph[plantStateNodeIndex];
+#endif
 
   // For gravity-based plants, rotate towards the desired direction (up or down)
 #if 1
@@ -1590,7 +1673,11 @@ void loopPlantMaintain()
   plantExitFaceOffset = 0;
   if (plantStateNode->bend)
   {
+#ifdef ENABLE_PLANT_SEAWEED
     byte offsetArrayIndex = (plantType >= PlantType_Seaweed) ? PLANT_FACE_OFFSET_INDEX_UP : PLANT_FACE_OFFSET_INDEX_DOWN;
+#else
+    byte offsetArrayIndex = PLANT_FACE_OFFSET_INDEX_DOWN;
+#endif
     plantExitFaceOffset = plantExitFaceOffsetArray[offsetArrayIndex + rootRelativeToGravity];
     if (plantExitFaceOffset == 99)
     {
@@ -1600,8 +1687,15 @@ void loopPlantMaintain()
   }
 
   bool plantIsSubmerged = tileFlags & TileFlag_Submerged;
+#ifdef ENABLE_PLANT_SEAWEED
   bool plantIsAquatic = plantType >= PlantType_Seaweed;
+#else
+  bool plantIsAquatic = false;
+#endif
+
+#ifdef ENABLE_PLANT_MUSHROOM
   if (plantType != PlantType_Mushroom)
+#endif
   {
     // Mushrooms are the only plant type that can live either above or below water
     if (plantIsSubmerged != plantIsAquatic)
@@ -1634,24 +1728,64 @@ void loopPlantMaintain()
   plantEnergy -= maintainCost;
 }
 
+#ifndef ONLY_TREE_PLANT
+
+#ifdef ENABLE_PLANT_DANGLE
+#define PLANT_TYPE_DANGLE   PlantType_Dangle
+#else
+#define PLANT_TYPE_DANGLE   PlantType_None
+#endif
+
+#ifdef ENABLE_PLANT_VINE
+#define PLANT_TYPE_VINE     PlantType_Vine
+#else
+#define PLANT_TYPE_VINE     PlantType_None
+#endif
+
+#ifdef ENABLE_PLANT_MUSHROOM
+#define PLANT_TYPE_MUSHROOM PlantType_Mushroom
+#else
+#define PLANT_TYPE_MUSHROOM PlantType_None
+#endif
+
+#ifdef ENABLE_PLANT_CORAL
+#define PLANT_TYPE_CORAL    PlantType_Coral
+#else
+#define PLANT_TYPE_CORAL    PlantType_None
+#endif
+
+#ifdef ENABLE_PLANT_SEABUSH
+#define PLANT_TYPE_SEABUSH  PlantType_SeaBush
+#else
+#define PLANT_TYPE_SEABUSH  PlantType_None
+#endif
+
+#ifdef ENABLE_PLANT_SEAWEED
+#define PLANT_TYPE_SEAWEED  PlantType_Seaweed
+#else
+#define PLANT_TYPE_SEAWEED  PlantType_None
+#endif
+
 PlantType plantTypeSelection[6][2] =
 {
   { PlantType_Tree,     PlantType_Tree },
-  { PlantType_Dangle,   PlantType_Mushroom },
-  { PlantType_Vine,     PlantType_Mushroom },
-  { PlantType_Vine,     PlantType_Vine },
-  { PlantType_Vine,     PlantType_Mushroom },
-  { PlantType_Dangle,   PlantType_Mushroom },
+  { PLANT_TYPE_DANGLE,  PLANT_TYPE_MUSHROOM },
+  { PLANT_TYPE_VINE,    PLANT_TYPE_MUSHROOM },
+  { PLANT_TYPE_VINE,    PLANT_TYPE_VINE },
+  { PLANT_TYPE_VINE,    PLANT_TYPE_MUSHROOM },
+  { PLANT_TYPE_DANGLE,  PLANT_TYPE_MUSHROOM },
 };
 PlantType plantTypeSelectionSubmerged[6][2] =
 {
-  { PlantType_Seaweed,  PlantType_Seaweed },
-  { PlantType_Seaweed,  PlantType_Coral },
-  { PlantType_SeaBush,  PlantType_Mushroom },
-  { PlantType_SeaBush,  PlantType_Mushroom },
-  { PlantType_SeaBush,  PlantType_Mushroom },
-  { PlantType_Seaweed,  PlantType_Coral },
+  { PLANT_TYPE_SEAWEED, PLANT_TYPE_SEAWEED },
+  { PLANT_TYPE_SEAWEED, PLANT_TYPE_CORAL },
+  { PLANT_TYPE_SEABUSH, PLANT_TYPE_MUSHROOM },
+  { PLANT_TYPE_SEABUSH, PLANT_TYPE_MUSHROOM },
+  { PLANT_TYPE_SEABUSH, PLANT_TYPE_MUSHROOM },
+  { PLANT_TYPE_SEAWEED, PLANT_TYPE_CORAL },
 };
+
+#endif  // ONLY_TREE_PLANT
 
 void loopPlantGrow()
 {
@@ -1680,7 +1814,11 @@ void loopPlantGrow()
     //   (1) tile orientation relative to gravity
     //   (2) being underwater
     byte randChoice = RANDOM_BYTE() & 0x1;
+#ifdef ONLY_TREE_PLANT
+    plantType = (tileFlags & TileFlag_Submerged) ? PlantType_None : PlantType_Tree;
+#else
     plantType = (tileFlags & TileFlag_Submerged) ? plantTypeSelectionSubmerged[gravityUpFace][randChoice] : plantTypeSelection[gravityUpFace][randChoice];
+#endif
 
     if (plantType == PlantType_None)
     {
@@ -1696,6 +1834,9 @@ void loopPlantGrow()
 
   // Send gathered sun down to the root
   gatheredSun += plantNumLeaves;
+  #ifndef EXTENDED_COMM_PAYLOAD
+  gatheredSun = MIN(gatheredSun, 15);
+  #endif
   if (gatheredSun > 0)
   {
     enqueueCommOnFace(plantRootFace, Command_GatherSun, gatheredSun);
@@ -1706,7 +1847,11 @@ void loopPlantGrow()
   debugPlantEnergy = plantEnergy;
 #endif
 
+#ifdef ONLY_TREE_PLANT
+  PlantStateNode *plantStateNode = &plantStateGraphTree[plantStateNodeIndex];
+#else
   PlantStateNode *plantStateNode = &plantParams[plantType].stateGraph[plantStateNodeIndex];
+#endif
 
   // Use energy to maintain the current state
   byte energyMaintain = 1;
@@ -1813,6 +1958,9 @@ void loopPlantGrow()
 void sendEnergyToFace(byte cwAmount, byte energyToSend)
 {
   byte exitFace = CW_FROM_FACE(plantRootFace, cwAmount);
+  #ifndef EXTENDED_COMM_PAYLOAD
+  energyToSend = MIN(energyToSend, 15);
+  #endif
   enqueueCommOnFace(exitFace, Command_DistEnergy, energyToSend);
 }
 
@@ -1905,6 +2053,7 @@ void loopBug()
 // -------------------------------------------------------------------------------------------------
 // FISH
 // -------------------------------------------------------------------------------------------------
+#ifdef ENABLE_CRITTER_FISH
 
 // Information about how fish move from tile to tile
 struct FishMovementInfo
@@ -2020,9 +2169,12 @@ void loopFish()
   }
 }
 
+#endif  // ENABLE_CRITTER_FISH
+
 // -------------------------------------------------------------------------------------------------
 // CRAWLY
 // -------------------------------------------------------------------------------------------------
+#ifdef ENABLE_CRITTER_CRAWLY
 
 void loopCrawly()
 {
@@ -2161,6 +2313,8 @@ void moveCrawlyToFace(byte face)
   crawlyHeadFace = face;
 }
 
+#endif  // ENABLE_CRITTER_CRAWLY
+
 // -------------------------------------------------------------------------------------------------
 
 void trySpawnCritter()
@@ -2178,19 +2332,38 @@ void trySpawnCritter()
   }
 
   // Check if we already have a critter
-  if (tileFlags & (TileFlag_HasBug | TileFlag_HasFish | TileFlag_HasCrawly))
+  if (tileFlags & (TileFlag_HasBug |
+#ifdef ENABLE_CRITTER_FISH
+                   TileFlag_HasFish |
+#else
+                   0 |
+#endif
+#ifdef ENABLE_CRITTER_CRAWLY
+                   TileFlag_HasCrawly
+#else
+                   0
+#endif  // ENABLE_CRITTER_CRAWLY
+                   ))
   {
     return;
   }
 
   // When under water, spawn a fish
   // Otherwise spawn a bug or crawly
+#ifdef ENABLE_CRITTER_FISH
   if (tileFlags & TileFlag_Submerged)
   {
     tileFlags |= TileFlag_HasFish;
     fishInfo.topFace = FishTopFace_Face5;
     fishInfo.colorIndex = RANDOM_BYTE() & 0x3;
   }
+#else
+  if (false)
+  {
+    // dummy while disabled
+  }
+#endif
+#ifdef ENABLE_CRITTER_CRAWLY
   else if (numNeighbors >= 4)
   {
     tileFlags |= TileFlag_HasBug;
@@ -2200,6 +2373,12 @@ void trySpawnCritter()
     tileFlags |= TileFlag_HasCrawly;
     crawlyInfo.hunger = 0;
   }
+#else
+  else
+  {
+    tileFlags |= TileFlag_HasBug;
+  }
+#endif
 
   tileFlags |= TileFlag_SpawnedCritter;
 }
@@ -2353,7 +2532,12 @@ void render()
   if (plantType != PlantType_None && !plantIsInResetState)
   {
 #ifndef DISABLE_PLANT_RENDERING
+
+#ifdef ONLY_TREE_PLANT
+    PlantStateNode *plantStateNode = &plantStateGraphTree[plantStateNodeIndex];
+#else
     PlantStateNode *plantStateNode = &plantParams[plantType].stateGraph[plantStateNodeIndex];
+#endif
     int lutBits = plantRenderLUTIndexes[plantStateNode->faceRenderIndex];
     byte targetFace = plantRootFace;
 
@@ -2375,7 +2559,11 @@ void render()
       {
         switch (lutIndex)
         {
+#ifdef ONLY_TREE_PLANT
+          case PlantFaceType_Leaf:   plantNumLeaves++;   color.as_uint16 = RGB_TO_U16_WITH_DIM(0, 255, 0);   break;
+#else
           case PlantFaceType_Leaf:   plantNumLeaves++;   color.as_uint16 = plantParams[plantType].leafColor;   break;
+#endif
           case PlantFaceType_Branch:                     color.as_uint16 = U16_BRANCH; break;
           case PlantFaceType_Flower: plantNumLeaves++;   color.as_uint16 = flowerColor; plantHasFlower = true; break;
         }
@@ -2395,6 +2583,7 @@ void render()
     SET_COLOR_ON_FACE(color, CW_FROM_FACE(bugTargetCorner, bugFlapOpen ? 5 : 4));
   }
 
+#ifdef ENABLE_CRITTER_FISH
   // FISH
   if (!fishTailTimer.isExpired())
   {
@@ -2418,7 +2607,9 @@ void render()
       SET_COLOR_ON_FACE(color, gravityRelativeFace[4]);
     }
   }
-
+#endif  // ENABLE_CRITTER_FISH
+  
+#ifdef ENABLE_CRITTER_CRAWLY
   // CRAWLY
   if (tileFlags & TileFlag_HasCrawly && crawlyTransferDelay < 2)
   {
@@ -2440,6 +2631,7 @@ void render()
       SET_COLOR_ON_FACE(color, crawlyFadeFace);
     }
   }
+#endif  // ENABLE_CRITTER_CRAWLY
 
   // DRIPPER
 #ifndef DISABLE_DRIPPER_RENDERING
@@ -2496,6 +2688,12 @@ void render()
 }
 
 /*
+
+2020-Nov-27
+* Add #defines to cut down code/data usage so project can fit with stock blinklib
+
+2020-Nov-24
+* Updated to BGA's custom blinklib 1.3.2
 
 2020-Sep-27
 * Adjusted colors of dripper speeds. And used flower to be more distinct from regular flower.
