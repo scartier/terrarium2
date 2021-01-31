@@ -34,7 +34,7 @@
 #if DELUXE_VERSION
 #define ENABLE_CRITTER_CRAWLY
 #define ENABLE_CRITTER_FISH
-#define ENABLE_PLANT_DANGLE
+#define ENABLE_PLANT_REDBUSH
 #define ENABLE_PLANT_SEABUSH
 #define ENABLE_PLANT_CORAL
 #define ENABLE_PLANT_VINE
@@ -44,7 +44,7 @@
 #define ENABLE_MILLIS8
 #endif
 
-#ifndef ENABLE_PLANT_DANGLE
+#ifndef ENABLE_PLANT_REDBUSH
 #ifndef ENABLE_PLANT_SEABUSH
 #ifndef ENABLE_PLANT_CORAL
 #ifndef ENABLE_PLANT_VINE
@@ -60,7 +60,10 @@
 
 #if USE_DATA_SPONGE
 #warning DATA SPONGE ENABLED
-byte sponge[9];
+byte sponge[19];
+// Jan 2: Allow eight fish colors: 19
+// Jan 1: After changing dangle plant: 27
+// Jan 1: Before changing dangle plant: 23
 // Nov 27: Remove plant structures when only tree: 60 data (+52), 5144 code (+100)
 // Nov 25: With stock blinklib: 8 data, 5244 code
 // Nov 25: Disable MUSHROOM plant: 223 data (+10), 4400 code (+14)
@@ -136,9 +139,9 @@ byte faceOffsetArray[] = { 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5 };
 
 #define RGB_TO_U16_WITH_DIM(r,g,b) ((((uint16_t)(r)>>3>>DIM_COLORS) & 0x1F)<<1 | (((uint16_t)(g)>>3>>DIM_COLORS) & 0x1F)<<6 | (((uint16_t)(b)>>3>>DIM_COLORS) & 0x1F)<<11)
 
-#define U16_DRIPPER0      RGB_TO_U16_WITH_DIM(   0, 192, 128 )
-#define U16_DRIPPER1      RGB_TO_U16_WITH_DIM(   0, 255, 128 )
-#define U16_DRIPPER2      RGB_TO_U16_WITH_DIM(   0, 255, 192 )
+#define U16_DRIPPER0      RGB_TO_U16_WITH_DIM(   0, 192,  96 )
+#define U16_DRIPPER1      RGB_TO_U16_WITH_DIM(  32, 255, 192 )
+#define U16_DRIPPER2      RGB_TO_U16_WITH_DIM( 128, 255, 255 )
 #ifdef ENABLE_CRITTER_CRAWLY
 #define U16_CRAWLY        RGB_TO_U16_WITH_DIM( 128, 255,  64 )
 #endif
@@ -323,8 +326,8 @@ byte reservoir;
 enum PlantType
 {
   PlantType_Tree,
-#ifdef ENABLE_PLANT_DANGLE
-  PlantType_Dangle,
+#ifdef ENABLE_PLANT_REDBUSH
+  PlantType_RedBush,             // must be index 1 due to plantBranchStage23Indexes[] array
 #endif
 #ifdef ENABLE_PLANT_VINE
   PlantType_Vine,
@@ -424,9 +427,6 @@ byte plantRenderLUTIndexes[] =
   0b01010100,   // 22: THREE LEAVES
 
   0b00010101,   // 23: BASE LEAF + CENTER & LEFT LEAVES
-
-  0b00010110,   // 24: BASE LEAF + CENTER & LEFT LEAVES
-  0b01010010,   // 25: BASE LEAF + CENTER & RIGHT LEAVES
 };
 
 PlantStateNode plantStateGraphTree[] =
@@ -451,8 +451,8 @@ PlantStateNode plantStateGraphTree[] =
   { 1, 1, 1,  0,   0,   0,    PlantExitFaces_None,        1 }, // BASE LEAF (choice on how to fork)
   { 0, 0, 0,  1,   1,   1,    PlantExitFaces_LeftRight,   8 }, // BASE BRANCH + TWO LEAVES
   { 1, 1, 0,  0,   0,   0,    PlantExitFaces_None,        1 }, // BASE LEAF (choice on left or right)
-  { 0, 0, 0,  1,   1,   1,    PlantExitFaces_LeftCenter,  24 }, // BASE LEAF + CENTER LEAF + LEFT LEAF
-  { 0, 0, 0,  1,   1,   1,    PlantExitFaces_CenterRight, 25 }, // BASE LEAF + CENTER LEAF + RIGHT LEAF
+  { 0, 0, 0,  1,   1,   1,    PlantExitFaces_LeftCenter,  23 }, // BASE LEAF + CENTER LEAF + LEFT LEAF
+  { 0, 0, 0,  1,   1,   1,    PlantExitFaces_CenterRight, 2 }, // BASE LEAF + CENTER LEAF + RIGHT LEAF
 
 // STAGE 3 (VINE or DROOPY FLOWER)
 //  G1 G2 W   B    AS,  1/2,  EXITS                       R
@@ -505,38 +505,32 @@ PlantStateNode plantStateGraphSeaweed[] =
 };
 #endif  // ENABLE_PLANT_SEAWEED
 
-#ifdef ENABLE_PLANT_DANGLE
-PlantStateNode plantStateGraphDangle[] =
+#ifdef ENABLE_PLANT_REDBUSH
+PlantStateNode plantStateGraphRedBush[] =
 {
 // BASE
 //  G1 G2 W   B    AS,  1/2,  EXITS                       R
-  { 1, 0, 0,  0,   1,   0,    PlantExitFaces_Center,      13 }, // CENTER LEAF
+  { 1, 0, 1,  0,   1,   0,    PlantExitFaces_Center,      13 }, // CENTER LEAF
   { 0, 0, 0,  0,   1,   0,    PlantExitFaces_Center,      14 }, // CENTER BRANCH
 
-// STAGE 1 (STALK)
+// STAGE 1 (TRUNK)
 //  G1 G2 W   B    AS,  1/2,  EXITS                       R
   { 1, 0, 1,  0,   0,   0,    PlantExitFaces_None,        1 }, // BASE LEAF
-  { 1, 0, 0,  0,   1,   0,    PlantExitFaces_Center,      4 }, // BASE BRANCH + CENTER LEAF
-  { 1, 0, 1,  0,   1,   0,    PlantExitFaces_Center,      5 }, // BASE BRANCH + CENTER BRANCH
-  { 0, 0, 0,  0,   1,   0,    PlantExitFaces_Center,      6 }, // BASE BRANCH + CENTER BRANCH + SIDE LEAVES
-  
-// STAGE 2 (DROOP)
-//  G1 G2 W   B    AS,  1/2,  EXITS                       R
-  { 1, 1, 1,  1,   0,   0,    PlantExitFaces_None,        1 }, // BASE LEAF
-  { 0, 0, 0,  1,   0,   0,    PlantExitFaces_Center,      3 }, // BASE LEAF + CENTER LEAF
-  { 1, 0, 0,  1,   1,   0,    PlantExitFaces_Center,      3 }, // BASE LEAF + CENTER LEAF (advance stage)
-  { 1, 0, 0,  1,   1,   0,    PlantExitFaces_Center,      3 }, // BASE LEAF + CENTER LEAF (advance stage)
-  { 0, 0, 0,  1,   0,   0,    PlantExitFaces_Center,      3 }, // BASE LEAF + CENTER LEAF (NOTE: *not* advance stage)
-  // Note this last state in stage 2 above is *not* an advance stage. That is to prevent the player from resetting 
-  // a flower in the next tile and automatically getting another flower. No infinite flowers for you.
+  { 0, 0, 0,  0,   1,   1,    PlantExitFaces_LeftRight,   8 }, // BASE BRANCH + FORK LEAVES
 
-// STAGE 3 (FLOWER)
+// STAGE 2 (FANS)
 //  G1 G2 W   B    AS,  1/2,  EXITS                       R
-  { 1, 0, 1,  1,   0,   0,    PlantExitFaces_None,        1 }, // BASE LEAF
-  { 1, 0, 1,  1,   0,   0,    PlantExitFaces_None,        15 }, // BASE LEAF + CENTER FLOWER
-  { 0, 0, 0,  1,   0,   0,    PlantExitFaces_None,        16 }, // BASE LEAF + CENTER FLOWER + SIDE LEAVES
+  { 1, 0, 1,  0,   0,   0,    PlantExitFaces_None,        1 }, // BASE LEAF
+  { 1, 1, 1,  0,   0,   0,    PlantExitFaces_None,        3 }, // BASE LEAF + CENTER LEAF
+  { 2, 0, 0,  0,   0,   0,    PlantExitFaces_None,        23 }, // BASE LEAF + CENTER & LEFT LEAVES
+  { 1, 0, 0,  0,   0,   0,    PlantExitFaces_None,        2 }, // BASE LEAF + CENTER & RIGHT LEAVES
+  { 1, 3, 0,  0,   0,   0,    PlantExitFaces_None,        21 }, // BASE LEAF + THREE LEAVES
+  { 1, 2, 0,  0,   0,   0,    PlantExitFaces_None,        21 }, // BASE LEAF + THREE LEAVES
+  { 1, 1, 0,  0,   0,   0,    PlantExitFaces_None,        21 }, // BASE LEAF + THREE LEAVES
+  { 0, 0, 0,  0,   0,   0,    PlantExitFaces_None,        16 }, // BASE LEAF + FLOWER + SIDE LEAVES
+  { 0, 0, 0,  0,   0,   0,    PlantExitFaces_None,        21 }, // BASE LEAF + THREE LEAVES
 };
-#endif  // ENABLE_PLANT_DANGLE
+#endif  // ENABLE_PLANT_REDBUSH
 
 #ifdef ENABLE_PLANT_MUSHROOM
 PlantStateNode plantStateGraphMushroom[] =
@@ -605,8 +599,8 @@ PlantParams plantParams[] =
 {
   // State graph              Leaf color
   {  plantStateGraphTree,     RGB_TO_U16_WITH_DIM(  0, 255,   0)  },
-#ifdef ENABLE_PLANT_DANGLE
-  {  plantStateGraphDangle,   RGB_TO_U16_WITH_DIM(160,  64,   0)  },
+#ifdef ENABLE_PLANT_REDBUSH
+  {  plantStateGraphRedBush,  RGB_TO_U16_WITH_DIM(160,  64,   0)  },
 #endif
 #ifdef ENABLE_PLANT_VINE
   {  plantStateGraphVine,     RGB_TO_U16_WITH_DIM(  0, 220,  64)  },
@@ -629,7 +623,7 @@ PlantParams plantParams[] =
 byte plantBranchStage23Indexes[2][2] =
 {
   { 9, 14 },
-  { 6, 11 }
+  { 4, 0 }
 };
 
 // Timer that controls how often a plant must pay its maintenance cost or else wither.
@@ -701,7 +695,7 @@ struct FishInfo
 {
   FishTopFace topFace : 2;
   FishSwimDir swimDir : 1;
-  byte colorIndex     : 2;
+  byte colorIndex     : 3;
 };
 FishInfo fishInfo;
 
@@ -711,10 +705,14 @@ byte fishTailColorIndex;
 
 uint16_t fishColors[] =
 {
-  RGB_TO_U16_WITH_DIM(242, 113, 102),
+  RGB_TO_U16_WITH_DIM(  2,  13,  32),
+  RGB_TO_U16_WITH_DIM(113, 242, 142),
   RGB_TO_U16_WITH_DIM(181, 255,  33),
   RGB_TO_U16_WITH_DIM( 33, 255, 207),
   RGB_TO_U16_WITH_DIM( 64, 255,  32),
+  RGB_TO_U16_WITH_DIM(230,  64, 212),
+  RGB_TO_U16_WITH_DIM(220,  32,  16),
+  RGB_TO_U16_WITH_DIM(240, 215, 232),
 };
 
 #endif  // ENABLE_CRITTER_FISH
@@ -1022,6 +1020,11 @@ void __attribute__((noinline)) setGravityTimer()
 
 void handleUserInput()
 {
+  if (buttonLongPressed())
+  {
+    resetOurState();
+  }
+  
   if (buttonMultiClicked())
   {
     byte clicks = buttonClickCount();
@@ -1029,7 +1032,7 @@ void handleUserInput()
     if (clicks == 5)
     {
       // Five clicks resets this tile
-      resetOurState();
+      //resetOurState();
     }
 #if DEBUG_PLANT_ENERGY
     else if (clicks == 6)
@@ -1062,7 +1065,7 @@ void handleUserInput()
       {
         tileFlags |= TileFlag_HasFish;
         fishInfo.topFace = FishTopFace_Face5;
-        fishInfo.colorIndex = RANDOM_BYTE() & 0x3;
+        fishInfo.colorIndex = RANDOM_BYTE() & 0x7;
       }
     }
 #endif  // ENABLE_CRITTER_FISH
@@ -1730,10 +1733,10 @@ void loopPlantMaintain()
 
 #ifndef ONLY_TREE_PLANT
 
-#ifdef ENABLE_PLANT_DANGLE
-#define PLANT_TYPE_DANGLE   PlantType_Dangle
+#ifdef ENABLE_PLANT_REDBUSH
+#define PLANT_TYPE_REDBUSH  PlantType_RedBush
 #else
-#define PLANT_TYPE_DANGLE   PlantType_None
+#define PLANT_TYPE_REDBUSH  PlantType_None
 #endif
 
 #ifdef ENABLE_PLANT_VINE
@@ -1769,11 +1772,11 @@ void loopPlantMaintain()
 PlantType plantTypeSelection[6][2] =
 {
   { PlantType_Tree,     PlantType_Tree },
-  { PLANT_TYPE_DANGLE,  PLANT_TYPE_MUSHROOM },
+  { PLANT_TYPE_REDBUSH, PLANT_TYPE_MUSHROOM },
   { PLANT_TYPE_VINE,    PLANT_TYPE_MUSHROOM },
   { PLANT_TYPE_VINE,    PLANT_TYPE_VINE },
   { PLANT_TYPE_VINE,    PLANT_TYPE_MUSHROOM },
-  { PLANT_TYPE_DANGLE,  PLANT_TYPE_MUSHROOM },
+  { PLANT_TYPE_REDBUSH, PLANT_TYPE_MUSHROOM },
 };
 PlantType plantTypeSelectionSubmerged[6][2] =
 {
@@ -2355,7 +2358,7 @@ void trySpawnCritter()
   {
     tileFlags |= TileFlag_HasFish;
     fishInfo.topFace = FishTopFace_Face5;
-    fishInfo.colorIndex = RANDOM_BYTE() & 0x3;
+    fishInfo.colorIndex = RANDOM_BYTE() & 0x7;
   }
 #else
   if (false)
@@ -2688,6 +2691,14 @@ void render()
 }
 
 /*
+
+2021-Jan-26
+* Changed reset to long press
+
+2021-Jan-2
+* Changed "dangle" plant to "red bush"
+* Allow 8 fish colors again
+* Better differentiate dripper speed colors
 
 2020-Nov-27
 * Add #defines to cut down code/data usage so project can fit with stock blinklib
