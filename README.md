@@ -58,9 +58,7 @@ There are several types of plants - each one grows differently. There are also o
 
 ## Reset
 
-One last thing. If you ever want to clear a tile of everything, you can reset it by clicking quickly five times. Just be sure you know what you’re doing!
-
-![How to reset a tile](https://lh5.googleusercontent.com/QFbmTXjYcH9PPQZkND9NhFG3r0nfCQ1tfTpGddQK46TyXbZyeBA-cJdX11TnvlDtAqKqwM4f_JgKcBMa1jtSbFK_r-E1ytv5Mikl7UsWf8ZcuqPhH0AdB4njMwWxYSxUryeZkIsO)
+One last thing. If you ever want to clear a tile of everything, you can reset it by holding the button down for a bit. Just be sure you know what you’re doing!
 
 ## Explore & Discover
 
